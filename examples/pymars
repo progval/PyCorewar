@@ -99,7 +99,7 @@ if __name__ == '__main__':
     else:
         if options.pspacesize == None:
             # Set default size for P-Space.
-            options.pspacesize = coresize / 16
+            options.pspacesize = options.coresize / 16
     if options.permutate and not len(args) == 2:
         print 'Permutating all start positions is only supported for '\
               '2 warriors.'
