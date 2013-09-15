@@ -1,0 +1,42 @@
+#!/usr/bin/python
+#
+# Test suite for PyCorewar
+#
+# Copyright (C) 2005-2006 Jens Gutzeit <jens@jgutzeit.de>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+
+import unittest
+import Test.Instruction88
+import Test.Instruction
+import Test.Warrior
+import Test.Calculator
+import Test.Parser
+import Test.BenchmarkingMARS88
+import Test.BenchmarkingMARS_94nop
+
+if __name__ == '__main__':
+    tests = []
+    
+    tests.append(unittest.makeSuite(Test.Instruction88.TestCase))
+    tests.append(unittest.makeSuite(Test.Instruction.TestCase))
+    tests.append(unittest.makeSuite(Test.Warrior.TestCase))
+    tests.append(unittest.makeSuite(Test.Calculator.TestCase))
+    tests.append(unittest.makeSuite(Test.Parser.TestCase))
+    tests.append(unittest.makeSuite(Test.BenchmarkingMARS88.TestCase))
+    tests.append(unittest.makeSuite(Test.BenchmarkingMARS_94nop.TestCase))
+    
+    allTests = unittest.TestSuite(tests)
+    unittest.TextTestRunner(verbosity=2).run(allTests)

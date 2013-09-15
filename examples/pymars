@@ -1,0 +1,212 @@
+#!/usr/bin/python
+#
+# pyMARS
+#
+# Copyright (C) 2006 Jens Gutzeit <jens@jgutzeit.de>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+
+import sys, os.path, optparse
+import Corewar, Corewar.Benchmarking
+
+VERSION = '0.2.1'
+DATE = 'Mon Mar 27 07:30:47 UTC 2006'
+
+if __name__ == '__main__':
+    # Parse command line.
+    parser = optparse.OptionParser(usage='pymars [options] files ...',
+                                   version='pyMARS %s (%s)' % (VERSION, DATE))
+    parser.set_defaults(rounds=1, coresize=8000, maxprocesses=8000,
+                        maxcycles=80000, maxlength=100, mindistance=100,
+                        pspacesize=None, fvalue=None, brief=False,
+                        permutate=False, icws_88=False, nopspace=False)
+    parser.add_option('-r', '--rounds', action='store', type='int',
+                      dest='rounds', help='Rounds to play, default=1')
+    parser.add_option('-s', '--coresize', action='store', type='int',
+                      dest='coresize', help='Size of core, default=8000')
+    parser.add_option('-p', '--maxprocesses', action='store', type='int',
+                      dest='maxprocesses',
+                      help='Max. number of proesses, default=8000')
+    parser.add_option('-c', '--maxcycles', action='store', type='int',
+                      dest='maxcycles',
+                      help='Number of cycles until tie, default=80000')
+    parser.add_option('-l', '--maxlength', action='store', type='int',
+                      dest='maxlength',
+                      help='Max. warrior length, default=100')
+    parser.add_option('-d', '--mindistance', action='store', type='int',
+                      dest='mindistance',
+                      help='Min. warrior distance, default=100')
+    parser.add_option('-S', '--pspacesize', action='store', type='int',
+                      dest='pspacesize',
+                      help='Size of P-Space, default=1/16 of coresize')
+    parser.add_option('-b', '--brief', action='store_true',
+                      dest='brief',
+                      help='Brief mode (no source listings)')
+    parser.add_option('-8', '--icws_88', action='store_true',
+                      dest='icws_88', help='Enforce ICWS \'88 rules')
+    parser.add_option('-N', '--nopspace', action='store_true',
+                      dest='nopspace', help='Disallow use of P-Space')
+    parser.add_option('-F', '--fixed', action='store', type='int',
+                      dest='fvalue', help='Fixed position of warrior #2')
+    parser.add_option('-P', None, action='store_true', dest='permutate',
+                      help='Permuate starting positions')
+    (options, args) = parser.parse_args()
+
+    # Check command line arguments.
+    if len(args) == 0:
+        # FIXME: print help
+        sys.exit(1)
+    if options.coresize < 1:
+        print 'The size of the core must be at least 1.'
+        sys.exit(1)
+    if options.maxcycles < 1:
+        print 'The number of cycles before a tie is declared must be at '\
+              'least 1.'
+        sys.exit(1)
+    if options.maxprocesses < 1:
+        print 'The max. number of processes must be at least 1.'
+        sys.exit(1)
+    if options.rounds < 0:
+        print 'The number of rounds must be at least 0.'
+        sys.exit(1)
+    if options.maxlength < 1:
+        print 'The max. length of a warrior must be at least 1.'
+        sys.exit(1)
+    if options.mindistance < options.maxlength:
+        print 'The minimal distance can not be smaller than the max. length '\
+              'of a warrior.'
+        sys.exit(1)
+    if len(args) * options.mindistance > options.coresize:
+        print 'The %d do not fit into the core.' % len(args)
+        sys.exit(1)
+    if options.nopspace:
+        if not options.pspacesize == None:
+            print 'Set the size of P-Space together with disallowing the '\
+                  'use of P-Space does not make sense.'
+            sys.exit(1)
+    else:
+        if options.pspacesize == None:
+            # Set default size for P-Space.
+            options.pspacesize = coresize / 16
+    if options.permutate and not len(args) == 2:
+        print 'Permutating all start positions is only supported for '\
+              '2 warriors.'
+        sys.exit(1)
+
+    # Check existance of warriors.
+    for fname in args:
+        if not os.path.exists(fname):
+            print 'ERROR: File \'%s\' does not exist.' % fname
+            sys.exit(1)
+
+    # Parse warriors.
+    if options.icws_88:
+        parser = Corewar.Parser(coresize=options.coresize,
+                                maxprocesses=options.maxprocesses,
+                                maxcycles=options.maxcycles,
+                                maxlength=options.maxlength,
+                                mindistance=options.mindistance,
+                                standard=Corewar.STANDARD_88)
+    elif options.nopspace:
+        parser = Corewar.Parser(coresize=options.coresize,
+                                maxprocesses=options.maxprocesses,
+                                maxcycles=options.maxcycles,
+                                maxlength=options.maxlength,
+                                mindistance=options.mindistance,
+                                standard=Corewar.STANDARD_94_NOP)
+    else:
+        if not options.pspacesize:
+            pspacesize = options.coresize / 16
+        else:
+            pspacesize = options.pspacesize
+        parser = Corewar.Parser(coresize=options.coresize,
+                                maxprocesses=options.maxprocesses,
+                                maxcycles=options.maxcycles,
+                                maxlength=options.maxlength,
+                                mindistance=options.mindistance,
+                                pspacesize=pspacesize,
+                                standard=Corewar.STANDARD_94)
+
+    warriors = []
+    for fname in args:
+        try:
+            warrior = parser.parse_file(fname)
+            warriors.append(warrior)
+            if parser.warnings:
+                for warning in parser.warnings:
+                    print 'Warning: %s' % warning
+                print '\n'
+            if not options.brief:
+                print warrior
+        except Corewar.WarriorParseError, e:
+            print e
+            sys.exit(1)
+
+    # Run fights.
+    if options.icws_88:
+        mars = Corewar.Benchmarking.MARS_88(coresize=options.coresize,
+                                            maxprocesses=options.maxprocesses,
+                                            maxcycles=options.maxcycles,
+                                            mindistance=options.mindistance,
+                                            maxlength=options.maxlength)
+    elif options.nopspace:
+        mars = Corewar.Benchmarking.MARS_94nop(coresize=options.coresize,
+                                            maxprocesses=options.maxprocesses,
+                                            maxcycles=options.maxcycles,
+                                            mindistance=options.mindistance,
+                                            maxlength=options.maxlength)
+    else:
+        print 'P-Space not yet implemented.'
+        sys.exit(1)
+
+    if len(warriors) == 1:
+        if not options.rounds == 0:
+            print 'Running fights with one warrior is not supported.'
+        sys.exit(1)
+    elif len(warriors) == 2:
+        if options.permutate:
+            result = mars.p_run(warriors)
+        elif options.fvalue:
+            result = mars.run(warriors, options.rounds, options.fvalue)
+        else:
+            result = mars.run(warriors, options.rounds)
+    elif len(warriors) > 2:
+        if options.fvalue:
+            result = mars.mw_run(warriors, options.rounds, options.fvalue)
+        else:
+            result = mars.mw_run(warriors, options.rounds)
+
+    # Show results.
+    if len(warriors) == 2:
+        rounds = result[0][0] + result[0][1] + result[0][2]
+        for i in xrange(2):
+            name = warriors[i].name
+            author = warriors[i].author
+            wins = result[i][0] * 100.0 / rounds
+            losses = result[i][1] * 100.0 / rounds
+            ties = result[i][2] * 100.0 / rounds
+            score = 3 * wins + ties
+            print '%s by %s scores %3.2f' % (name, author, score)
+            print '\tW %3.2f %%, L %3.2f %%, T %3.2f %%' % (wins, losses, ties)
+    else:
+        for i in xrange(len(warriors)):
+            name = warriors[i].name
+            author = warriors[i].author
+            wins = result[i][0]
+            print '%s by %s scores %d' % (name, author, wins)
+            print '\tResult: ',
+            for item in result[i]:
+                print '%d ' % item,
+            print

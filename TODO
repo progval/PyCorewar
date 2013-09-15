@@ -1,0 +1,10 @@
+TODO for PyCorewar
+
+- Change Corewar.Parser to parse even more warriors
+- Create Corewar.SimpleParser to parse warriors (in simplified format)
+- Create Corewar.Benchmarking.MARS94
+- Adjust pymars to included currently supported features.
+- Extend benchmark (more warriors, different hills).
+- Add routines for benchmarking warriors, similar to 
+
+      benchmark(warrior1, (opponent1, opponent2, opponent3))

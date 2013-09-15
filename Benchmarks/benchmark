@@ -1,0 +1,815 @@
+#!/usr/bin/python
+#
+# benchmark - Benchmark for PyCorewar
+#
+# ATTENTION! This is not a real benchmark. Its purpose is to make different
+# versions of PyCorewar comparable, but not to give an absolute measure for
+# the speed of the MARS.
+#
+# Copyright (C) 2006 Jens Gutzeit <jens@jgutzeit.de>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+
+import sys, os, time, optparse
+import Corewar, Corewar.Benchmarking
+
+VERSION = '0.4.1'
+DATE = 'Mon Mar 27 17:52:06 UTC 2006'
+
+# Data for '94nop-fights.
+# Format: warrior1, warrior2, seed,
+#         result_100, insns_100,
+#         result_1000, insns_1000,
+#         result_2500, insns_2500,
+#         result_5000, insns_5000,
+#         result_10000, insns_10000
+FIGHTS_94_NOP = [['firestorm.red', 'utterer.red', 383236,
+                    [  15,   12,   73],   12895399,
+                    [ 105,   98,  797],  133801563,
+                    [ 277,  253, 1970],  330565985,
+                    [ 548,  498, 3954],  660026937,
+                    [1131, 1028, 7841], 1310254333],
+                 ['behemot.red', 'arrow.red', 1082210,
+                    [  31,   59,   10],    4631704,
+                    [ 441,  465,   94],   45393917,
+                    [1121, 1158,  221],  110093478,
+                    [2238, 2318,  444],  220951713,
+                    [4519, 4569,  912],  443075972],
+                 ['olivia.red', 'soldierofsilk.red', 1125870,
+                    [  15,   26,   59],   11542186,
+                    [ 174,  265,  561],  113641200,
+                    [ 431,  675, 1394],  283413789,
+                    [ 891, 1349, 2760],  561256273,
+                    [1758, 2726, 5516], 1122181185],
+                 ['frantic.red', 'jinx2.red', 215785,
+                    [  50,   42,    8],    4081966,
+                    [ 476,  425,   99],   43679639,
+                    [1218, 1036,  246],  108514867,
+                    [2446, 2068,  486],  219158091,
+                    [4907, 4158,  935],  427052450],
+                 ['win.red', 'hazylazyc11.red', 800213,
+                    [  43,   51,    6],    8684975,
+                    [ 430,  522,   48],   85496689,
+                    [1052, 1328,  120],  209167209,
+                    [2057, 2721,  222],  417250726,
+                    [4133, 5396,  471],  836263996],
+                 ['yatima_fsh.red', 'hescansalone.red', 416145,
+                    [  32,   57,   11],    5265902,
+                    [ 332,  605,   63],   49102021,
+                    [ 792, 1557,  151],  124026947,
+                    [1575, 3124,  301],  249587249,
+                    [3189, 6198,  613],  497739174],
+                 ['rotpendragon2.red', 'solo3.red', 507201,
+                    [  42,   46,   12],    6503613,
+                    [ 442,  417,  141],   61230435,
+                    [1055, 1061,  384],  162234815,
+                    [2089, 2155,  756],  327855821,
+                    [4128, 4356, 1516],  661180077],
+                 ['strange.red', 'hullabaloo.red', 505077,
+                    [  44,   44,   12],    6001959,
+                    [ 375,  495,  130],   56677388,
+                    [ 909, 1274,  317],  138430198,
+                    [1773, 2572,  655],  278990364,
+                    [3591, 5110, 1299],  562173769],
+                 ['yorba.red', 'phatpaper.red', 1092802,
+                    [  14,   10,   76],   12708780,
+                    [ 138,  191,  671],  113204631,
+                    [ 337,  525, 1638],  279736149,
+                    [ 665, 1042, 3293],  563253452,
+                    [1327, 2151, 6522], 1115466408],
+                 ['preserver.red', 'blowrag.red', 344394,
+                    [  28,   31,   41],   10111061,
+                    [ 334,  321,  345],   94175598,
+                    [ 835,  786,  879],  235247334,
+                    [1642, 1562, 1796],  476321518,
+                    [3244, 3136, 3620],  950598912],
+                 ['recon2.red', 'unheardof.red', 1293608,
+                    [  37,   42,   21],    8258261,
+                    [ 431,  372,  197],   91918706,
+                    [1127,  874,  499],  236185286,
+                    [2269, 1726, 1005],  472820718,
+                    [4496, 3546, 1958],  934017918],
+                 ['damageinc2.red', 'fuse.red', 197514,
+                    [  41,   33,   26],    8522596,
+                    [ 491,  303,  206],   79054075,
+                    [1221,  741,  538],  202515691,
+                    [2490, 1462, 1048],  402698908,
+                    [4998, 2872, 2130],  812031158],
+                 ['myblur2.red', 'sinustree.red', 137855,
+                    [  27,   47,   26],    8689039,
+                    [ 284,  467,  249],   86122118,
+                    [ 755, 1109,  636],  219875295,
+                    [1495, 2195, 1310],  443916069,
+                    [2999, 4396, 2605],  889215918],
+                 ['mandragora.red', 'bitethebullet.red', 517393,
+                    [  22,   31,   47],    9501486,
+                    [ 238,  392,  370],   84671968,
+                    [ 594,  964,  942],  209423480,
+                    [1215, 1966, 1819],  411401654,
+                    [2392, 3947, 3661],  823762925],
+                 ['shottonothing.red', 'first.red', 538992,
+                    [  59,   31,   10],    7564532,
+                    [ 570,  331,   99],   71446010,
+                    [1430,  789,  281],  186506564,
+                    [2894, 1510,  596],  377266220,
+                    [5775, 3062, 1163],  750297208],
+                 ['marsupiallion.red', 'candy2.red', 163271,
+                    [  29,   68,    3],    4395271,
+                    [ 291,  677,   32],   42781512,
+                    [ 721, 1693,   86],  107439487,
+                    [1475, 3339,  186],  221633552,
+                    [2936, 6713,  351],  440040152],
+                 ['humanizer.red', 'bvowkiumfizmoxid.red', 379498,
+                    [  10,   20,   70],   11646306,
+                    [ 122,  171,  707],  117991048,
+                    [ 284,  438, 1778],  296767693,
+                    [ 581,  892, 3527],  588745818,
+                    [1200, 1787, 7013], 1172483245],
+                 ['dandelion3.red', 'macabres.red', 1759922,
+                    [  37,   39,   24],    9135431,
+                    [ 359,  411,  230],   89079312,
+                    [ 887, 1033,  580],  226089868,
+                    [1786, 2058, 1156],  452813031,
+                    [3580, 4114, 2306],  908185978],
+                 ['qutrum.red', 'revivalfire.red', 785266,
+                    [  30,   60,   10],    3187438,
+                    [ 399,  474,  127],   38798800,
+                    [1038, 1172,  290],   94819156,
+                    [2039, 2381,  580],  187973390,
+                    [4142, 4685, 1173],  380750517],
+                 ['decoysignal.red', 'leapinthedark_fsh.red', 274866,
+                    [  40,   22,   38],    9497998,
+                    [ 449,  218,  333],   86531232,
+                    [1109,  545,  846],  218993690,
+                    [2170, 1055, 1775],  446826763,
+                    [4394, 2044, 3562],  892435392],
+                 ['lordimprings2.red', 'vain.red', 531635,
+                    [  17,    6,   77],   12793595,
+                    [ 144,  101,  755],  123734588,
+                    [ 346,  276, 1878],  307730081,
+                    [ 673,  556, 3771],  618535791,
+                    [1350, 1127, 7523], 1233501694],
+                 ['yikes.red', 'lastjudgement.red', 793336,
+                    [  25,   24,   51],    9324640,
+                    [ 270,  185,  545],  100156674,
+                    [ 653,  446, 1401],  254819842,
+                    [1312,  895, 2793],  507774429,
+                    [2770, 1800, 5430], 1001753978],
+                 ['elvenking_fsh.red', 'uninvited.red', 223717,
+                    [  42,    5,   53],   10986329,
+                    [ 373,  132,  495],   96196688,
+                    [ 903,  363, 1234],  237184234,
+                    [1811,  745, 2444],  472375676,
+                    [3546, 1490, 4964],  951509557],
+                 ['halcyon.red', 'rascal.red', 1900353,
+                    [  62,   37,    1],    4367697, 
+                    [ 540,  373,   87],   50617006,
+                    [1372,  884,  244],  131105057,
+                    [2753, 1728,  519],  265155786,
+                    [5532, 3470,  998],  524027568],
+                 ['torcht18.red', 'myth.red', 1606213,
+                    [  43,   37,   20],   10974018,
+                    [ 488,  289,  223],  102516923,
+                    [1191,  728,  581],  260153441,
+                    [2433, 1461, 1106],  517323997,
+                    [4821, 2992, 2187], 1032629884],
+                 ['recovery.red', 'silking.red', 104492,
+                    [   7,   17,   76],   12658424,
+                    [ 102,  195,  703],  117493219,
+                    [ 264,  467, 1769],  294852610,
+                    [ 544,  914, 3542],  589398313,
+                    [1113, 1878, 7009], 1170388240],
+                 ['demolitionman.red', 'arctica.red', 998839,
+                    [  26,   58,   16],    4650938,
+                    [ 295,  526,  179],   49987245,
+                    [ 758, 1299,  443],  126366931,
+                    [1546, 2551,  903],  253300039,
+                    [3094, 5071, 1835], 508228654],
+                 ['tygerofpantang.red', 'reepicheep.red', 47694,
+                    [  26,   51,   23],    7178704,
+                    [ 320,  430,  250],   76930215,
+                    [ 762, 1109,  629],  188672832,
+                    [1522, 2215, 1263],  375951996,
+                    [3070, 4473, 2457],  745276179],
+                 ['humanmachine.red', 'shrink_fsh.red', 155645,
+                    [  15,   15,   70],   11342019,
+                    [ 143,  125,  732],  119909163,
+                    [ 380,  280, 1840],  300207862,
+                    [ 735,  557, 3708],  603979652,
+                    [1530, 1075, 7395], 1206848923],
+                 ['cereal.red', 'speeed.red', 1427355,
+                    [  36,   56,    8],    5405266,
+                    [ 377,  581,   42],   48019929,
+                    [ 986, 1382,  132],  124604996,
+                    [1934, 2813,  253],  247493341,
+                    [3857, 5641,  502],  488312737],
+                 ['forscanner.red', 'sonofvain.red', 668219,
+                    [  26,   44,   30],    9397780,
+                    [ 263,  395,  342],   98281663,
+                    [ 646,  982,  872],  246701606,
+                    [1292, 1966, 1742],  492022009,
+                    [2587, 3959, 3454],  977950338],
+                 ['devilish.red', 'defensive.red', 615613,
+                    [  18,   15,   67],   10903571,
+                    [ 130,  144,  726],  118968037,
+                    [ 288,  355, 1857],  303656729,
+                    [ 621,  727, 3652],  596921066,
+                    [1362, 1392, 7246], 1183777165],
+                 ['dracula2003.red', 'deathstar.red', 1024252,
+                    [  35,   54,   11],    4184112,
+                    [ 380,  504,  116],   38266456,
+                    [ 954, 1258,  288],   95745222,
+                    [1917, 2514,  569],  191827309,
+                    [3816, 4963, 1221],  396056295],
+                 ['maelstrom.red', 'minijedi.red', 977073,
+                    [  13,   10,   77],   12833280,
+                    [ 137,  109,  754],  125069459,
+                    [ 313,  268, 1919],  318925602,
+                    [ 657,  538, 3805],  632980957,
+                    [1316, 1060, 7624], 1269482994],
+                 ['rotfcopy.red', 'zooom.red', 1454810,
+                    [  38,   10,   52],   10870083,
+                    [ 381,  124,  495],  106040458,
+                    [ 933,  281, 1286],  267403246,
+                    [1894,  563, 2543],  526767249,
+                    [3765, 1153, 5082], 1056178289],
+                 ['slimetest1.red', 'miniblur.red', 1208116,
+                    [  22,   67,   11],    6434888,
+                    [ 273,  601,  126],   61892944,
+                    [ 685, 1537,  278],  151075953,
+                    [1351, 3130,  519],  297476690,
+                    [2642, 6310, 1048],  595954508],
+                 ['zorca.red', 'pixie.red', 1970417,
+                    [  48,   44,    8],    3842804,
+                    [ 411,  510,   79],   38601499,
+                    [1028, 1288,  184],   96904171,
+                    [2016, 2595,  389],  196953664,
+                    [4022, 5204,  774],  390977487],
+                 ['ethanolve.red', 'eccentric.red', 680095,
+                    [  31,   21,   48],    9547886,
+                    [ 271,  268,  461],   91007710,
+                    [ 705,  696, 1099],  220004863,
+                    [1428, 1351, 2221],  442277851,
+                    [2805, 2734, 4461],  885840226],
+                 ['pppc.red', 'twinshot.red', 287377,
+                    [  49,   28,   23],    6570101,
+                    [ 421,  363,  216],   66797174,
+                    [1021,  982,  497],  164736060,
+                    [1935, 2099,  966],  333449862,
+                    [3802, 4199, 1999],  674980294],
+                 ['cascade.red', 'mooncake.red', 1552278,
+                    [  23,   19,   58],   10076399,
+                    [ 186,  185,  629],  109264842,
+                    [ 490,  433, 1577],  275714235,
+                    [ 970,  884, 3146],  547501779,
+                    [1899, 1795, 6306], 1095796134],
+                 ['sdn.red', 'goonie.red', 430400,
+                    [  25,   36,   39],   10258969,
+                    [ 241,  371,  388],   99745460,
+                    [ 559,  924, 1017],  256636061,
+                    [1070, 1938, 1992],  511873710,
+                    [2143, 3888, 3969], 1021134152],
+                 ['gremlin.red', 'giants.red', 497780,
+                    [  44,   46,   10],    6150303,
+                    [ 478,  444,   78],   59600614,
+                    [1186, 1127,  187],  145059795,
+                    [2392, 2246,  362],  289190237,
+                    [4781, 4459,  760],  580829001],
+                 ['willow.red', 'gargantuan.red', 1946183,
+                    [  20,   76,    4],   2258500,
+                    [ 208,  746,   46],  22871138,
+                    [ 530, 1846,  124],  59897177,
+                    [1029, 3719,  252], 118110499, 
+                    [2043, 7421,  536], 240023324],
+                 ['mischief.red', 'cracki.red', 1889400,
+                    [  47,   49,    4],   6043874,
+                    [ 435,  463,  102],  65674507,
+                    [1092, 1152,  256], 165579665,
+                    [2232, 2278,  490], 330845496,
+                    [4409, 4620,  971], 659534395],
+                 ['omms.red', 'quicksilver.red', 1400849,
+                    [  35,   55,   10],   4266466,
+                    [ 353,  580,   67],  43736696,
+                    [ 871, 1475,  154], 106454296, 
+                    [1704, 2964,  332], 218288585,
+                    [3433, 5908,  659], 442065010],
+                 ['herbalavenger.red', 'geist.red', 392694,
+                    [  56,   43,    1],   5786152,
+                    [ 570,  408,   22],  60986599,
+                    [1406, 1036,   58], 151040319,
+                    [2789, 2103,  108], 300092349,
+                    [5569, 4238,  193], 599004785],
+                 ['g2.red', 'baselinedeluxe.red', 1357497,
+                    [  36,   31,   33],   9382355,
+                    [ 336,  304,  360],  94943877,
+                    [ 826,  763,  911], 238690954,
+                    [1604, 1504, 1892], 480818159,
+                    [3224, 2947, 3829], 966562028],
+                 ['agonyII.red', 'borgir.red', 622416,
+                    [  33,   54,   13],   5898666,
+                    [ 296,  581,  123],  54835285,
+                    [ 754, 1443,  303], 138656933,
+                    [1503, 2892,  605], 277272859,
+                    [3065, 5764, 1171], 552896489],
+                 ['razor.red', 'attacker.red', 835397,
+                    [  36,   63,    1],   6428393,
+                    [ 339,  648,   13],  60543702,
+                    [ 811, 1660,   29], 150397455,
+                    [1644, 3287,   69], 301902570,
+                    [3298, 6582,  120], 601591487],
+                 ['venomousphiltre.red', 'luckyluke.red', 1694598,
+                    [  34,   39,   27],   8281713,
+                    [ 285,  474,  241],  81184544,
+                    [ 736, 1121,  643], 208209416,
+                    [1467, 2229, 1304], 415829411,
+                    [2890, 4469, 2641], 835456859],
+                ]
+
+def benchmark_pycorewar_94nop(rounds):
+    """Run the benchmark for '94nop settings with the given number of rounds.
+    Only 100, 1000, 2500, 5000 and 10000 are valid numbers for rounds."""
+
+    if rounds not in (100, 1000, 2500, 5000, 10000):
+        raise ValueError, 'Invalid number of rounds: %d' % rounds
+
+    num_fights = len(FIGHTS_94_NOP)
+    print '--> Benchmarking PyCorewar (\'94nop, %d fights, %d rounds)\n' %\
+          (num_fights, rounds)
+
+    mars = Corewar.Benchmarking.MARS_94nop()
+    parser = Corewar.Parser(standard=Corewar.STANDARD_94_NOP)
+
+    sum = 0.0
+    directory = '../warriors/Koenigstuhl/94nop/'
+    for data in FIGHTS_94_NOP:
+        # Get and check data.
+        w1_src = directory + data[0]
+        w2_src = directory + data[1]
+        seed = data[2]
+        if rounds == 100:
+            result = data[3]
+            num_insns = data[4]
+        elif rounds == 1000:
+            result = data[5]
+            num_insns = data[6]
+        elif rounds == 2500:
+            result = data[7]
+            num_insns = data[8]
+        elif rounds == 5000:
+            result = data[9]
+            num_insns = data[10]
+        else:
+            result = data[11]
+            num_insns = data[12]
+
+        # Parse warriors.
+        try:
+            w1 = parser.parse_file(w1_src)
+            w2 = parser.parse_file(w2_src)
+        except:
+            print 'Could not parse warriors (%s, %s).' % (data[0], data[1])
+            #sys.exit(1)
+            continue
+
+        # Run fights.
+        startTime = time.time()
+        results = mars.run((w1, w2), rounds, seed)
+        diffTime = time.time() - startTime
+        speed = num_insns/diffTime/1000000
+
+        # Check result.
+        if not results[0] == result:
+            print 'Got invalid result for %s vs. %s.' % (w1.name, w2.name)
+            print 'Expected: ', result
+            print 'Got     : ', results[0]
+            #sys.exit(1)
+
+        # Print speed for current fight.
+        tmp = '%s vs. %s' % (w1.name, w2.name)
+        while len(tmp) < 45:
+            tmp += ' '
+        print '%s: %8.3f MIPS' % (tmp, speed)
+
+        sum += speed
+
+    # Print average speed.
+    sum /= num_fights
+    print '\nAverage speed of PyCorewar, \'94nop           : %8.3f MIPS' % sum
+    print '\n'
+
+def benchmark_pmars_94nop(rounds, path):
+    """Run the benchmark for '94nop settings with the given number of rounds.
+    Only 100, 1000, 2500, 5000 and 10000 are valid numbers for rounds. Use
+    pMARS as executable."""
+
+    if rounds not in (100, 1000, 2500, 5000, 10000):
+        raise ValueError, 'Invalid number of rounds: %d' % rounds
+
+    num_fights = len(FIGHTS_94_NOP)
+    print '--> Benchmarking pMARS (\'94nop, %d fights, %d rounds)\n' %\
+          (num_fights, rounds)
+
+    parser = Corewar.Parser(standard=Corewar.STANDARD_94_NOP)
+
+    sum = 0.0
+    directory = '../warriors/Koenigstuhl/94nop/'
+    for data in FIGHTS_94_NOP:
+        # Get and check data.
+        w1_src = directory + data[0]
+        w2_src = directory + data[1]
+        seed = data[2]
+        if rounds == 100:
+            result = data[3]
+            num_insns = data[4]
+        elif rounds == 1000:
+            result = data[5]
+            num_insns = data[6]
+        elif rounds == 2500:
+            result = data[7]
+            num_insns = data[8]
+        elif rounds == 5000:
+            result = data[9]
+            num_insns = data[10]
+        else:
+            result = data[11]
+            num_insns = data[12]
+
+        # Parse warriors (to get their names)
+        try:
+            w1 = parser.parse_file(w1_src)
+            w2 = parser.parse_file(w2_src)
+        except:
+            print 'Could not parse warriors (%s, %s).' % (data[0], data[1])
+            #sys.exit(1)
+            continue
+
+        # Build command line.
+        cmd_line = '%s -b -r %d -F %d %s %s' % (path, rounds, seed, w1_src,\
+                                                w2_src)
+
+        # Run fights.
+        startTime = time.time()
+        child_in, child_out = os.popen2(cmd_line)
+        output = child_out.readlines()
+        child_out.close()
+        child_in.close()
+        diffTime = time.time() - startTime
+        speed = num_insns/diffTime/1000000
+
+        # Parse output of pMARS.
+        results = output[2].split(' ')
+        w = int(results[1])
+        l = int(results[2])
+        t = rounds - w - l
+        pmars_result = [w, l, t]
+        
+        # Check result.
+        if not pmars_result == result:
+            print 'Got invalid result for %s vs. %s.' % (w1.name, w2.name)
+            print 'Expected: ', result
+            print 'Got     : ', pmars_result
+            #sys.exit(1)
+
+        # Print speed for current fight.
+        tmp = '%s vs. %s' % (w1.name, w2.name)
+        while len(tmp) < 45:
+            tmp += ' '
+        print '%s: %8.3f MIPS' % (tmp, speed)
+
+        sum += speed
+
+    # Print average speed.
+    sum /= num_fights
+    print '\nAverage speed of pMARS, \'94nop               : %8.3f MIPS' % sum
+    print '\n'
+
+def benchmark_exmars_94nop(rounds, path):
+    """Run the benchmark for '94nop settings with the given number of rounds.
+    Only 100, 1000, 2500, 5000 and 10000 are valid numbers for rounds. Use
+    exmars as executable."""
+
+    if rounds not in (100, 1000, 2500, 5000, 10000):
+        raise ValueError, 'Invalid number of rounds: %d' % rounds
+
+    num_fights = len(FIGHTS_94_NOP)
+    print '--> Benchmarking exmars (\'94nop, %d fights, %d rounds)\n' %\
+          (num_fights, rounds)
+
+    parser = Corewar.Parser(standard=Corewar.STANDARD_94_NOP)
+
+    sum = 0.0
+    directory = '../warriors/Koenigstuhl/94nop/'
+    for data in FIGHTS_94_NOP:
+        # Get and check data.
+        w1_src = directory + data[0]
+        w2_src = directory + data[1]
+        seed = data[2]
+        if rounds == 100:
+            result = data[3]
+            num_insns = data[4]
+        elif rounds == 1000:
+            result = data[5]
+            num_insns = data[6]
+        elif rounds == 2500:
+            result = data[7]
+            num_insns = data[8]
+        elif rounds == 5000:
+            result = data[9]
+            num_insns = data[10]
+        else:
+            result = data[11]
+            num_insns = data[12]
+
+        # Parse warriors (to get their names)
+        try:
+            w1 = parser.parse_file(w1_src)
+            w2 = parser.parse_file(w2_src)
+        except:
+            print 'Could not parse warriors (%s, %s).' % (data[0], data[1])
+            #sys.exit(1)
+            continue
+
+        # Build command line.
+        cmd_line = '%s -b -r %d -F %d %s %s' % (path, rounds, seed, w1_src,\
+                                                w2_src)
+
+        # Run fights.
+        startTime = time.time()
+        child_in, child_out = os.popen2(cmd_line)
+        output = child_out.readline()
+        child_out.close()
+        child_in.close()
+        diffTime = time.time() - startTime
+        speed = num_insns/diffTime/1000000
+
+        # Parse output of pMARS.
+        results = output.split(' ')
+        w = int(results[0])
+        t = int(results[1])
+        l = rounds - w - t
+        exmars_result = [w, l, t]
+        
+        # Check result.
+        if not exmars_result == result:
+            print 'Got invalid result for %s vs. %s.' % (w1.name, w2.name)
+            print 'Expected: ', result
+            print 'Got     : ', exmars_result
+            #sys.exit(1)
+
+        # Print speed for current fight.
+        tmp = '%s vs. %s' % (w1.name, w2.name)
+        while len(tmp) < 45:
+            tmp += ' '
+        print '%s: %8.3f MIPS' % (tmp, speed)
+
+        sum += speed
+
+    # Print average speed.
+    sum /= num_fights
+    print '\nAverage speed of exmars, \'94nop              : %8.3f MIPS' % sum
+    print '\n'
+
+def benchmark_exhaust_94nop(rounds, path):
+    """Run the benchmark for '94nop settings with the given number of rounds.
+    Only 100, 1000, 2500, 5000 and 10000 are valid numbers for rounds. Use
+    exhaust as executable."""
+
+    if rounds not in (100, 1000, 2500, 5000, 10000):
+        raise ValueError, 'Invalid number of rounds: %d' % rounds
+
+    num_fights = len(FIGHTS_94_NOP)
+    print '--> Benchmarking exhaust (\'94nop, %d fights, %d rounds)\n' %\
+          (num_fights, rounds)
+
+    parser = Corewar.Parser(standard=Corewar.STANDARD_94_NOP)
+
+    sum = 0.0
+    directory = 'rc/'
+    for data in FIGHTS_94_NOP:
+        # Get and check data.
+        w1_src = directory + data[0]
+        w2_src = directory + data[1]
+        seed = data[2]
+        if rounds == 100:
+            result = data[3]
+            num_insns = data[4]
+        elif rounds == 1000:
+            result = data[5]
+            num_insns = data[6]
+        elif rounds == 2500:
+            result = data[7]
+            num_insns = data[8]
+        elif rounds == 5000:
+            result = data[9]
+            num_insns = data[10]
+        else:
+            result = data[11]
+            num_insns = data[12]
+
+        # Parse warriors (to get their names)
+        try:
+            w1 = parser.parse_file('../warriors/Koenigstuhl/94nop/' + data[0])
+            w2 = parser.parse_file('../warriors/Koenigstuhl/94nop/' + data[1])
+        except:
+            print 'Could not parse warriors (%s, %s).' % (data[0], data[1])
+            #sys.exit(1)
+            continue
+
+        # Build command line.
+        cmd_line  = '%s -b -r %d -F %d %s %s' % (path, rounds, seed, w1_src,\
+                                                 w2_src)
+
+        # Run fights.
+        startTime = time.time()
+        child_in, child_out = os.popen2(cmd_line)
+        output = child_out.readline()
+        child_out.close()
+        child_in.close()
+        diffTime = time.time() - startTime
+        speed = num_insns/diffTime/1000000
+
+        # Parse output of exhaust.
+        results = output.split(' ')
+        w = int(results[0])
+        t = int(results[1])
+        l = rounds - w - t
+        exhaust_result = [w, l, t]
+        
+        # Check result.
+        if not exhaust_result == result:
+            print 'Got invalid result for %s vs. %s.' % (w1.name, w2.name)
+            print 'Expected: ', result
+            print 'Got     : ', exhaust_result
+            #sys.exit(1)
+
+        # Print speed for current fight.
+        tmp = '%s vs. %s' % (w1.name, w2.name)
+        while len(tmp) < 45:
+            tmp += ' '
+        print '%s: %8.3f MIPS' % (tmp, speed)
+
+        sum += speed
+
+    # Print average speed.
+    sum /= num_fights
+    print '\nAverage speed of exhaust, \'94nop             : %8.3f MIPS' % sum
+    print '\n'
+
+def benchmark_exhaust_ma_94nop(rounds, path):
+    """Run the benchmark for '94nop settings with the given number of rounds.
+    Only 100, 1000, 2500, 5000 and 10000 are valid numbers for rounds. Use
+    exhaust-ma as executable."""
+
+    if rounds not in (100, 1000, 2500, 5000, 10000):
+        raise ValueError, 'Invalid number of rounds: %d' % rounds
+
+    num_fights = len(FIGHTS_94_NOP)
+    print '--> Benchmarking exhaust-ma (\'94nop, %d fights, %d rounds)\n' %\
+          (num_fights, rounds)
+
+    parser = Corewar.Parser(standard=Corewar.STANDARD_94_NOP)
+
+    sum = 0.0
+    directory = 'rc/'
+    for data in FIGHTS_94_NOP:
+        # Get and check data.
+        w1_src = directory + data[0]
+        w2_src = directory + data[1]
+        seed = data[2]
+        if rounds == 100:
+            result = data[3]
+            num_insns = data[4]
+        elif rounds == 1000:
+            result = data[5]
+            num_insns = data[6]
+        elif rounds == 2500:
+            result = data[7]
+            num_insns = data[8]
+        elif rounds == 5000:
+            result = data[9]
+            num_insns = data[10]
+        else:
+            result = data[11]
+            num_insns = data[12]
+
+        # Parse warriors (to get their names)
+        try:
+            w1 = parser.parse_file('../warriors/Koenigstuhl/94nop/' + data[0])
+            w2 = parser.parse_file('../warriors/Koenigstuhl/94nop/' + data[1])
+        except:
+            print 'Could not parse warriors (%s, %s).' % (data[0], data[1])
+            #sys.exit(1)
+            continue
+
+        # Build command line.
+        cmd_line  = '%s -b -r %d -F %d %s %s' % (path, rounds, seed, w1_src,\
+                                                 w2_src)
+
+        # Run fights.
+        startTime = time.time()
+        child_in, child_out = os.popen2(cmd_line)
+        output = child_out.readline()
+        child_out.close()
+        child_in.close()
+        diffTime = time.time() - startTime
+        speed = num_insns/diffTime/1000000
+
+        # Parse output of exhaust.
+        results = output.split(' ')
+        w = int(results[0])
+        t = int(results[1])
+        l = rounds - w - t
+        exhaust_result = [w, l, t]
+        
+        # Check result.
+        if not exhaust_result == result:
+            print 'Got invalid result for %s vs. %s.' % (w1.name, w2.name)
+            print 'Expected: ', result
+            print 'Got     : ', exhaust_result
+            #sys.exit(1)
+
+        # Print speed for current fight.
+        tmp = '%s vs. %s' % (w1.name, w2.name)
+        while len(tmp) < 45:
+            tmp += ' '
+        print '%s: %8.3f MIPS' % (tmp, speed)
+
+        sum += speed
+
+    # Print average speed.
+    sum /= num_fights
+    print '\nAverage speed of exhaust-ma, \'94nop           : %8.3f MIPS' % sum
+    print '\n'
+
+if __name__ == '__main__':
+    print 'Bogus Benchmark for PyCorewar, version %s (%s)' % (VERSION, DATE)
+    print '(use command line to change benchmark parameters)\n'
+
+    # Parse command line.
+    parser = optparse.OptionParser()
+    parser.set_defaults(rounds=1000, benchmark='94nop', mars='pycorewar',
+                        path=None)
+    parser.add_option('-r', '--rounds', action='store', type='int',
+                      dest='rounds',
+                      help='Number of rounds (100, 1000, 2500, 5000 or 10000)')
+    parser.add_option('-b', '--benchmark', action='store', type='string',
+                      dest='benchmark',
+                      help='Select benchmark (94nop, 88)')
+    parser.add_option('-m', '--mars', action='store', type='string',
+                      dest='mars',
+                      help='Select MARS (pycorewar, pmars, exmars, exhaust, '\
+                           'exhaust-ma)')
+    parser.add_option('-p', '--path', action='store', type='string',
+                      dest='path',
+                      help='Path to specified MARS')
+
+    (options, args) = parser.parse_args()
+    if options.rounds not in (100, 1000, 2500, 5000, 10000):
+        print 'Invalid number of rounds: %d' % option.rounds
+        print 'Only 100, 1000, 2500, 5000 or 10000 are allowed!'
+        sys.exit(1)
+    if options.benchmark not in ('94nop',):
+        print 'Invalid benchmark: %s' % options.benchmark
+        print 'Only \'94nop\' is supported at the moment.'
+        sys.exit(1)
+    if options.mars not in ('pycorewar', 'pmars', 'exmars', 'exhaust',\
+                            'exhaust-ma'):
+        print 'Invalid MARS: %s' % options.mars
+        print 'Only \'pycorewar\', \'pmars\', \'exmars\', \'exhaust\' and '\
+              '\'exhaust-ma\' are supported at the moment.'
+        sys.exit(1)
+    if not options.mars == 'pycorewar' and options.path == None:
+        print 'Please specify path to executable for MARS other than '\
+              'PyCorewar'
+        sys.exit(1)
+
+    # Run benchmark.
+    if options.benchmark == '94nop':
+        if options.mars == 'pycorewar':
+            benchmark_pycorewar_94nop(options.rounds)
+        elif options.mars == 'pmars':
+            benchmark_pmars_94nop(options.rounds, options.path)
+        elif options.mars == 'exmars':
+            benchmark_exmars_94nop(options.rounds, options.path)
+        elif options.mars == 'exhaust':
+            benchmark_exhaust_94nop(options.rounds, options.path)
+        elif options.mars == 'exhaust-ma':
+            benchmark_exhaust_ma_94nop(options.rounds, options.path)
+        else:
+            print 'This shouldn\'t happen. Blame the program\'s author!'
+            sys.exit(1)
+    else:
+        print 'This shouldn\'t happen. Blame the program\'s author!'
+        sys.exit(1)

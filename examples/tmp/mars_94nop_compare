@@ -1,0 +1,66 @@
+#!/usr/bin/python
+#
+# Copyright (C) 2006 Jens Gutzeit <jens@jgutzeit.de>
+#
+# Try to compare the speed of PyCorewar and pMARS
+
+import time, os, sys, random
+import Corewar
+import Corewar.Benchmarking
+
+pmars_exec = 'pmars_server_patched'
+
+def bench_pmars(w1, w2, rounds, seed):
+    """Use pMARS to run the fight."""
+    
+    cmdLine = '%s -b -r %d -F %d %s %s' % (pmars_exec, rounds, seed, w1, w2)
+
+    childIn, childOut = os.popen2(cmdLine)
+    resultLine = childOut.readlines()
+    childOut.close()
+    childIn.close()
+
+    results = resultLine[2].split(' ')
+    w = int(results[1])
+    l = int(results[2])
+    t = rounds - w - l
+
+    # Return elapsed time and result.
+    return [w, l, t]
+
+if __name__ == '__main__':
+    parser = Corewar.Parser(standard=Corewar.STANDARD_94_NOP)
+    mars = Corewar.Benchmarking.MARS_94nop()
+    rounds = 100
+
+    warriors = []
+    wdir = 'warriors/Koenigstuhl/94nop/'
+    for w in os.listdir(wdir):
+        warriors.append(w)
+    warriors.sort()
+
+    data = []
+    for i in xrange(len(warriors)):
+        seed = random.randint(300,1000000)
+        w1 = warriors[i]
+        w1src = wdir + w1
+        print '%d: %s\t' % (i+1, w1)
+        warrior1 = parser.parse_file(w1src)
+        pmars_res = bench_pmars(w1src, w1src, rounds, seed)
+        #pycw_res = mars.run((warrior1, warrior1), rounds, seed)
+        #if pmars_res == pycw_res[0]:
+         #   print 'ok'
+            #score = 3 * pycw_res[0][0] + pycw_res[0][2]
+            #print '%s vs. %s: OK' % (warrior1.name, warrior1.name)
+            #print '  score: %d (W %d, L %d, T %d)' % (score, \
+            #                                          pycw_res[0][0],\
+            #                                          pycw_res[0][1], \
+            #                                          pycw_res[0][2])
+        #else:
+         #   print '\t\tBAD BAD'
+            #print '%s vs. %s: BAD!!!' % (warrior1.name, warrior1.name)
+            #sys.exit(1)
+        data.append((w1, seed, pmars_res))
+
+for item in data:
+    print '\t', item, ','

@@ -1,0 +1,265 @@
+#!/usr/bin/python
+#
+# Copyright (C) 2006 Jens Gutzeit <jens@jgutzeit.de>
+#
+# Try to compare the speed of PyCorewar and pMARS
+
+import time, os, sys
+import Corewar, Corewar.Benchmarking
+
+# ATTENTION! ADJUST THE FOLLOWING VALUES TO YOUR NEEDS!
+# location of the different MARS
+pmars_exec = 'pmars_server_patched'
+exmars_exec = 'exmars'
+exhaust_exec = 'exhaust'
+exhaustma_exec = 'exhaust-ma'
+
+# list of fights and expected results in this "benchmark"
+# format: warrior1, warrior2, seed, number of executed instructions
+fights = [['sonofvain.red', 'hfb.red', 43873, 120360073],
+               ['arrow.red', 'blacken.red', 171733, 42532907],
+               ['hazylazy.red', 'reepicheep.red', 10000, 58817919],
+               ['npaper2.red', 'uninvited.red', 2006, 114756881],
+               ['behemot.red', 'olivia.red', 752310, 62158489],
+               ['hullabaloo.red', 'spiritual.red', 983475, 93224721],
+               ['blowrag.red', 'willow.red', 73663, 78644869],
+               ['yorba.red', 'newt.red', 66666, 102851133],
+               ['crazyshot2.red', 'silking.red', 243853, 97086221],
+               ['candy2.red', 'impbullet1.red', 111133, 117489101],
+               ['fugitive.red', 'rosebud.red', 742983, 143340123],
+               ['benjrevenge.red', 'g2.red', 20299, 77754968]
+              ]
+
+def bench_pmars(w1, w2, rounds, seed):
+    """Use pMARS to run the fight."""
+    
+    cmdLine = '%s -b -r %d -F %d %s %s' % (pmars_exec, rounds, seed, w1, w2)
+
+    startTime = time.time()
+    childIn, childOut = os.popen2(cmdLine)
+    resultLine = childOut.readlines()
+    childOut.close()
+    childIn.close()
+    diffTime = time.time() - startTime
+
+    results = resultLine[2].split(' ')
+    w = int(results[1])
+    l = int(results[2])
+    t = rounds - w - l
+
+    # Return elapsed time and result.
+    return [diffTime, [w, l, t]]
+
+def bench_exhaust(w1, w2, rounds, seed):
+    """Use exhaust to run the fight."""
+    
+    # convert warrior sources
+    cmdLine = '%s -r 0 %s' % (pmars_exec, w1)
+    childIn, childOut = os.popen2(cmdLine)
+    resultLines = childOut.readlines()
+    childOut.close()
+    childIn.close()
+    f = open('w1.red', 'w')
+    for line in resultLines[2:]:
+        f.write(line)
+    f.close()
+
+    cmdLine = '%s -r 0 %s' % (pmars_exec, w2)
+    childIn, childOut = os.popen2(cmdLine)
+    resultLines = childOut.readlines()
+    childOut.close()
+    childIn.close()
+    f = open('w2.red', 'w')
+    for line in resultLines[2:]:
+        f.write(line)
+    f.close()
+
+    # run fight
+    cmdLine = '%s -b -r %d -F %d w1.red w2.red' % (exhaust_exec, rounds, seed)
+
+    startTime = time.time()
+    childIn, childOut = os.popen2(cmdLine)
+    resultLine = childOut.readline()
+    childOut.close()
+    childIn.close()
+    diffTime = time.time() - startTime
+
+    results = resultLine.split(' ')
+    w = int(results[0])
+    t = int(results[1])
+    l = rounds - w - t
+
+    # Return elapsed time and result.
+    return [diffTime, [w, l, t]]
+
+def bench_exhaustma(w1, w2, rounds, seed):
+    """Use exhaust-ma to run the fight."""
+    
+    # convert warrior sources
+    cmdLine = '%s -r 0 %s' % (pmars_exec, w1)
+    childIn, childOut = os.popen2(cmdLine)
+    resultLines = childOut.readlines()
+    childOut.close()
+    childIn.close()
+    f = open('w1.red', 'w')
+    for line in resultLines[2:]:
+        f.write(line)
+    f.close()
+
+    cmdLine = '%s -r 0 %s' % (pmars_exec, w2)
+    childIn, childOut = os.popen2(cmdLine)
+    resultLines = childOut.readlines()
+    childOut.close()
+    childIn.close()
+    f = open('w2.red', 'w')
+    for line in resultLines[2:]:
+        f.write(line)
+    f.close()
+
+    # run fight
+    cmdLine = '%s -b -r %d -F %d w1.red w2.red' % (exhaustma_exec, rounds,
+                                                   seed)
+
+    startTime = time.time()
+    childIn, childOut = os.popen2(cmdLine)
+    resultLine = childOut.readline()
+    childOut.close()
+    childIn.close()
+    diffTime = time.time() - startTime
+
+    results = resultLine.split(' ')
+    w = int(results[0])
+    t = int(results[1])
+    l = rounds - w - t
+
+    # Return elapsed time and result.
+    return [diffTime, [w, l, t]]
+
+def bench_exmars(w1, w2, rounds, seed):
+    """Use exMARS to run the fight."""
+    
+    cmdLine = '%s -b -r %d -F %d %s %s' % (exmars_exec, rounds, seed, w1, w2)
+
+    startTime = time.time()
+    childIn, childOut = os.popen2(cmdLine)
+    resultLine = childOut.readline()
+    childOut.close()
+    childIn.close()
+    diffTime = time.time() - startTime
+
+    results = resultLine.split(' ')
+    w = int(results[0])
+    t = int(results[1])
+    l = rounds - w - t
+
+    # Return elapsed time and result.
+    return [diffTime, [w, l, t]]
+
+def bench_pycorewar(w1, w2, rounds, seed):
+    """Use PyCorewar to run the fight."""
+    
+    startTime = time.time()
+    mars = Corewar.Benchmarking.MARS_94nop()
+    parser = Corewar.Parser(standard=Corewar.STANDARD_94_NOP)
+    warrior1 = parser.parse_file(w1)
+    warrior2 = parser.parse_file(w2)
+    res = mars.run((warrior1, warrior2), rounds, seed)
+    diffTime = time.time() - startTime
+
+    # Return elapsed time and result.
+    return [diffTime, res[0]]
+
+if __name__ == '__main__':
+    parser = Corewar.Parser(standard=Corewar.STANDARD_94_NOP)
+    rounds = 1000
+
+    sum_pmars = 0.0
+    sum_pycorewar = 0.0
+    sum_exmars = 0.0
+    sum_exhaust = 0.0
+    sum_exhaustma = 0.0
+    sum_fmars = 0.0
+
+    i = 0
+    for fight in fights:
+        i += 1
+        w1_src = '../warriors/Koenigstuhl/94nop/' + fight[0]
+        w2_src = '../warriors/Koenigstuhl/94nop/' + fight[1]
+        seed = fight[2] 
+
+        # Run fight with different MARS.
+        w1 = parser.parse_file(w1_src)
+        w2 = parser.parse_file(w2_src)
+        print 'Fight %s: %s vs. %s' % (str(i).zfill(2), w1.name, w2.name)
+
+        # pMARS
+        res_pmars = bench_pmars(w1_src, w2_src, rounds, seed)
+        speed_pmars = fight[3]/res_pmars[0]/1000000.0
+        sum_pmars += speed_pmars
+        print '    pMARS     : %6.3f MIPS' % speed_pmars
+
+        # exhaust
+        res_exhaust = bench_exhaust(w1_src, w2_src, rounds, seed)
+        speed_exhaust = fight[3]/res_exhaust[0]/1000000.0
+        sum_exhaust += speed_exhaust
+        speed_comp = (speed_exhaust / speed_pmars - 1.0) * 100.0
+        if not res_exhaust[1] == res_pmars[1]:
+            print '    WARNING: exhaust shows wrong result!'
+        print '    exhaust   : %6.3f MIPS (%4.1f %% faster than pMARS)' %\
+              (speed_exhaust, speed_comp)
+
+        # exMARS
+        res_exmars = bench_exmars(w1_src, w2_src, rounds, seed)
+        speed_exmars = fight[3]/res_exmars[0]/1000000.0
+        sum_exmars += speed_exmars
+        speed_comp = (speed_exmars / speed_pmars - 1.0) * 100.0
+        if not res_exmars[1] == res_pmars[1]:
+            print '    WARNING: exMARS shows wrong result!'
+        print '    exMARS    : %6.3f MIPS (%4.1f %% faster than pMARS)' %\
+              (speed_exmars, speed_comp)
+
+        # exhaust-ma
+        res_exhaustma = bench_exhaustma(w1_src, w2_src, rounds, seed)
+        speed_exhaustma = fight[3]/res_exhaustma[0]/1000000.0
+        sum_exhaustma += speed_exhaustma
+        speed_comp = (speed_exhaustma / speed_pmars - 1.0) * 100.0
+        if not res_exhaustma[1] == res_pmars[1]:
+            print '    WARNING: exhaust-ma shows wrong result!'
+        print '    exhaust-ma: %6.3f MIPS (%4.1f %% faster than pMARS)' %\
+              (speed_exhaustma, speed_comp)
+
+        # PyCorewar
+        res_pycorewar = bench_pycorewar(w1_src, w2_src, rounds, seed)
+        speed_pycorewar = fight[3]/res_pycorewar[0]/1000000.0
+        sum_pycorewar += speed_pycorewar
+        speed_comp = (speed_pycorewar / speed_pmars - 1.0) * 100.0
+        if not res_pycorewar[1] == res_pmars[1]:
+            print '    WARNING: PyCorewar shows wrong result!'
+        print '    PyCorewar : %6.3f MIPS (%4.1f %% faster than pMARS)' %\
+              (speed_pycorewar, speed_comp)
+
+# Show average speed of the different MARS.
+print '\nAveraged results'
+
+sum_pmars /= len(fights)
+print '    pMARS     : %6.3f MIPS' % sum_pmars
+
+sum_exhaust /= len(fights)
+speed_comp = (sum_exhaust / sum_pmars - 1.0) * 100.0
+print '    exhaust   : %6.3f MIPS (%4.1f %% faster than pMARS)' %\
+      (sum_exhaust, speed_comp)
+
+sum_exmars /= len(fights)
+speed_comp = (sum_exmars / sum_pmars - 1.0) * 100.0
+print '    exMARS    : %6.3f MIPS (%4.1f %% faster than pMARS)' %\
+      (sum_exmars, speed_comp)
+
+sum_exhaustma /= len(fights)
+speed_comp = (sum_exhaustma / sum_pmars - 1.0) * 100.0
+print '    exhaust-ma: %6.3f MIPS (%4.1f %% faster than pMARS)' %\
+      (sum_exhaustma, speed_comp)
+
+sum_pycorewar /= len(fights)
+speed_comp = (sum_pycorewar / sum_pmars - 1.0) * 100.0
+print '    PyCorewar : %6.3f MIPS (%4.1f %% faster than pMARS)' %\
+      (sum_pycorewar, speed_comp)

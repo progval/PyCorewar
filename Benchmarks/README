@@ -1,0 +1,27 @@
+README for the Bogus Benchmark for PyCorewar
+
+WARNING! Do not expect the benchmark to return useful results. You have been
+warned! ;-)
+
+You need at least Python (>= 2.3) and PyCorewar (>= 0.2.0) to run the
+benchmark. If you want to compare the results to other MARS, you will need
+executables of theses MARS, too. At the moment pMARS, exmars, exhaust and
+exhaust-ma are supported.
+
+The benchmark for '94nop consists of 50 fights. You can specify how many
+rounds each fight should run. At the moment only 100, 1000, 2500, 5000
+and 10000 are accepted number of rounds. Expected the benchmark to take
+a lot of time, if you specify 5000 or even 10000 rounds. Use the "-r"
+switch to specify the number of rounds.
+
+To get a short help on the usage of the benchmark, type "./benchmark -h"
+on the command line.
+
+To benchmark PyCorewar, type "./benchmark -r 1000".
+
+If you want to benchmark pMARS, you need the server version of pMARS.
+Type "./benchmark -r 1000 -m pmars -p /path/to/pmars_server" to run the
+benchmark.
+
+If you want to benchmark exmars, you need the exmars executable. Type
+"./benchmark -r 1000 -m exmars -p /path/to/exmars" to run the benchmark.

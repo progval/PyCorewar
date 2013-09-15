@@ -1,0 +1,142 @@
+Using PyCorewar 0.2.0
+
+1. Parsing warriors
+-------------------
+
+The module "Corewar" contains all you need to parse warriors. Usually it
+should be as simple as
+
+import Corewar
+
+parser = Corewar.Parser(coresize = 8000, maxprocesses = 8000, maxcycles = 8000,
+                        maxlength = 100, mindistance = 100,
+                        standard = Corewar.STANDARD_94_NOP)
+warrior = parser.parse_file('warrior.red')
+
+At the momenent you can parse warriors according to ICWS '88
+(Corewar.STANDARD_88), ICWS '94nop (Corewar.STANDARD_94_NOP) or
+ICWS '94 (Corewar.STANDARD_94). Allmost all features, that the parser
+of pMARS provides, are supported with the exception of multiline EQUs and
+line continuations. The current parser implementation still has some
+known bugs regarding the handline of FOR/ROF-loops with zero iterations.
+The parser requires each warrior file to start with ";redcode". At the moment
+more than 99% of all warriors from Koenigstuhl can be parsed with
+PyCorewar's parser.
+
+Parsing warriors is not restricted to files. It is also possible to parse
+strings:
+
+warrior = parser.parse(warrior_string)
+
+If the file/string contains errors, an exception (Corewar.WarriorParseError)
+is thrown. All warnings, which are generated during parsing, can be
+accessed via the "warnings"-attribute of the parse (list of strings).
+
+The parser is completed written in Python. You shouldn't expect it to
+parse more than 30 or 40 warriors per second on recent computer.
+
+2. Running fights
+-----------------
+
+The module "Corewar.Benchmarking" contains several highly optimized MARS:
+
+MARS_88    (only for warriors according to ICWS '88)
+MARS_94nop (only for warriors according to ICWS '94 draft, no P-Space)
+
+They all have the same interface:
+
+import Corewar.Benchmarking
+
+...
+mars = Corewar.Benchmarking.MARS_94nop(coresize = 8000, maxprocesses = 8000,
+                                       maxcycles = 8000, mindistance = 100,
+                                       maxlength = 100)
+result = mars.run((warrior1, warrior2), rounds = 100, seed = 3423423)
+...
+
+The returned result has the format: [[w1, l1, t1], [w2, l2, t2]], where
+w1 are the number of won rounds for warrior1, l1 the number of lost rounds
+for warrior1, ...
+
+You can also use "mars.p_run((warrior1, warrior2))", if you want to get
+the result for all possible start positions.
+
+Multiwarrior-fights can be run with
+
+result = mars.mw_run((w1, w2, w3, w4), rounds = 100, seed = 3434444)
+
+The returned result is a list with the results for each warrior. Each item
+has the following format: [w1, w2, w3, w4, ..., l], where w1 is the number
+of rounds, where only this warrior has survived, w2 is the number of rounds
+where this and another warrior has survived, w3 is the number of rounds,
+where this and two other warriors have survived, ..., l the number of
+lost rounds.
+
+3. Manipulating instructions
+----------------------------
+
+The module "Corewar.Redcode" contains everything, that you need to
+create and manipulate instructions. The class "Instruction88" only supports
+instruction according to ICWS '88, the class "Instruction" supports all
+instruction according to ICWS '94. Apart from these two classes, several
+constants are declared:
+
+OPCODE_DAT, OPCODE_MOV, OPCODE_ADD, ...
+MODIFIER_A, MODIFIER_B, MODIFIER_F, ...
+MODE_IMMEDIATE, MODE_DIRECT, MODE_B_POSTINCREMENT, ...
+
+Please use only these constants when manipulating instruction, because
+newer versions of PyCorewar might use different values for the them.
+
+"Instruction88" has the following attributes:
+
+ - opcode
+ - amode
+ - afield
+ - bmode
+ - bfield
+
+A newly created Instruction88 defaults to "DAT $ 0, $ 0". If you set the
+values of the A- or B-field, they are automatically reduced modulo the
+coresize:
+
+...
+import Corewar.Redcode
+
+insn = Corewar.Redcode.Instruction(coresize=8000)
+insn.afield = 8005
+...
+
+After that the A-field of the Instruction is 5.
+
+"Instruction" has the following attributes:
+
+ - opcode
+ - modifier
+ - amode
+ - afield
+ - bmode
+ - bfield
+
+4. Manipulating Warriors
+------------------------
+
+...
+import Corewar
+from Corewar.Redcode import *
+
+warrior = Corewar.Warrior()
+warrior.name = 'Imp'
+warrior.author = 'A. K. Dewdney'
+
+insn = Instruction(coresize=8000)
+insn.opcode = OPCODE_MOV
+insn.modifier = MODIFIER_I
+insn.amode = MODE_DIRECT
+insn.afield = 0
+insn.bmode = MODE_DIRECT
+insn.bfield = 1
+
+warrior.instructions.append(insn)
+warrior.start = 0
+...

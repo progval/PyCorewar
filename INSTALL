@@ -1,0 +1,17 @@
+To compile PyCorewar you need Python (>= 2.3.0 or higher) and a C-compiler.
+To install it, run:
+
+      python setup.py install
+
+Type "./testsuite" to run the extensive testsuite.
+
+The directory "Benchmarks" contains a little benchmark.
+
+Windows
+-------
+
+If you happen to be sentenced to use Windows you can install Cygwin
+(www.cygwin.com) to use PyCorewar. Make sure to install GCC, Python and
+GNU Make. After that you can install it with:
+
+      python setup.py install

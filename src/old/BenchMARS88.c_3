@@ -1,0 +1,6790 @@
+/* BenchMARS88.c
+ *
+ * Copyright (C) 2005 Jens Gutzeit <jens@jgutzeit.de>
+ *
+ * This program is free software; you can redistribute it and/or modify
+ * it under the terms of the GNU General Public License as published by
+ * the Free Software Foundation; either version 2 of the License, or
+ * (at your option) any later version.
+ *
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
+ *
+ * You should have received a copy of the GNU General Public License
+ * along with this program; if not, write to the Free Software
+ * Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+ */
+
+#include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <MyTypes.h>
+#include <Instruction.h>
+#include <BenchMARS88.h>
+
+/* x = x + 1 mod coresize */
+#define INCMOD(x)		do { if (++(x) == coresize) (x) = 0; \
+				} while (0)
+
+/* Untested and for later usage in '94:
+#define INCMOD(x)		do { (x)++; (x) &= ((x) - coresize) >> 31; } \
+				while (0)
+*/
+
+/* x = x - 1 mod coresize */
+/*
+#define DECMOD(x)		do { if ((x)-- == 0) (x) = coresize - 1;  \
+				} while (0)
+*/
+#define DECMOD(x)		(x) += -1+(coresize & ((((int) x)-1) >> 31))	
+
+/* z = x + y mod coresize */
+#define ADDMOD(z,x,y,coresize)	do { (z) = (x) + (y); \
+				     if ( (z) >= coresize ) (z) -= coresize; \
+				   } while (0)
+
+/* z = x - y mod coresize */
+/*
+#define SUBMOD(z,x,y,coresize)	do { (z) = (x) - (y); \
+				     if ( (z) >= coresize ) (z) += coresize; \
+				   } while (0)
+*/
+#define SUBMOD(z, x, y, coresize) do { (z) = (x) - (y); \
+				  (z) += (coresize & (((int)z) >> 31)); \
+				  } while (0)
+
+/* Increase instruction pointer and make sure, that it wraps around. */
+#define IPINCMOD(x)		do { if ( ++(x) == core_end ) (x) = core; \
+                                } while (0)
+
+/* Append a process to the processes queue without checking the size of
+ * the queue. */
+#define PQUEUE_APPEND(x)	do { *pqinfo->tail++ = (x);               \
+				     if (pqinfo->tail == pqueue_end)      \
+				             pqinfo->tail = pqueue;       \
+				} while (0)
+
+#define ASSIGNADDR(addr,x,y)	addr = x + y;                             \
+				if (addr >= core_end) addr -= coresize
+
+#define ADDADDR(addr,incr)	addr += incr;                             \
+				if (addr >= core_end) addr -= coresize;
+
+/*
+ * Warriors
+ */
+
+/* Free memory of list of warriors. No error checking is performed. */
+void
+free_warriors(warrior_t *wlist, u32_t numwarriors)
+{
+	u32_t i;
+
+	for (i = 0; i < numwarriors; i++) {
+		free(wlist[i].insns);
+	}
+	free(wlist);
+}
+
+/* Load warrior onto the give position in the core (without checking,
+ * whether it overwrites another warrior). */
+void
+load_warrior(insn_t *core, warrior_t *warrior, u32_t position, u32_t coresize)
+{
+	u32_t i;
+
+	for (i = 0; i < warrior->length; i++) {
+		core[position].insn = warrior->insns[i].insn;
+		core[position].a = warrior->insns[i].a;
+		core[position].b = warrior->insns[i].b;
+		INCMOD(position);
+	}
+}
+
+/* RNG for setting positions of warriors. Might be replaced by a better
+ * version in future releases! pmars-0.9.2/pos.c - CACM, 31:10 (1988)
+ * return 1 <= value <= 2^31-2, cycles: 2^32
+ */
+u32_t
+rng(u32_t seed)
+{
+	s32_t tmp = seed;
+
+  	tmp = 16807 * (tmp % 127773) - 2836 * (tmp / 127773);
+	if (tmp < 0) {
+		tmp += 2147483647;
+	}
+
+	return tmp;
+}
+
+/* Warrior positions algorithms. */
+
+#define RETRIES1 20 /* How many times to try to generate one position. */
+#define RETRIES2  4 /* How many times to start backtracking. */
+
+/* Warrior positioning algorithm for multiwarrior fights. Warrior 0 is always
+ * positioned at 0. Return 0 on success (i.e. valid setup found), return 1
+ * on error. The value of the seed is changed in order to have a different
+ * setup the next round.
+ */
+u32_t
+calc_pos(u32_t *positions, u32_t numwarriors, u32_t coresize,
+	 u32_t mindistance, s32_t *seed)
+{
+	u32_t pos = 1; /* Current warrior to find position for. */
+	u32_t i;
+	/* Free available space for all warriors, but the first. */
+	u32_t space = (coresize - 2 * mindistance + 1);
+	s32_t diff;
+	u32_t retries1 = RETRIES1;
+	u32_t retries2 = RETRIES2;
+
+	do {
+		/* Set "random" position for current warrior. */
+		*seed = rng(*seed);
+		positions[pos] = mindistance + (*seed % space);
+
+		/* Test, if new position leads to overlapping. */
+		for (i = 1; i < pos; ++i) {
+			diff = (s32_t) positions[pos] - positions[i];
+			if (diff < 0) {
+				diff = -diff;
+			}
+			if ((u32_t) diff < mindistance) {
+				break; /* Overlap! */
+			}
+		}
+
+		if (i == pos) {
+			++pos; /* No overlap, calculate next postion. */
+		} else {
+			if (!retries2) {
+				return 1; /* Backtracking did not succeed.
+					   * Give up :-( */
+			}
+			if (!retries1) {
+				/* Start backtracking. */
+				pos = i;
+				--retries2;
+				retries1 = RETRIES1;
+			} else {
+				/* Try again. */
+				--retries1;
+			}
+		}
+		
+	} while (pos < numwarriors);
+
+	return 0; /* Valid setup found. */
+}
+
+/* Backup warrior positioning algorithm. */
+void
+calc_pos_backup(u32_t *positions, u32_t numwarriors, u32_t coresize,
+	        u32_t mindistance, s32_t *seed)
+{
+	u32_t i;
+	u32_t j;
+	u32_t space = coresize - numwarriors * mindistance + 1;
+	u32_t tmp;
+
+	/* Choose numwarriors-1 positions from available space. */
+	for (i = 1; i < numwarriors; i++) {
+		*seed = rng(*seed);
+		tmp = *seed % space;
+		for (j = i - 1; j > 0; j--) {
+			if (tmp > positions[j]) {
+				break;
+			}
+			positions[j+1] = positions[j];
+		}
+		positions[j+1] = tmp;
+	}
+
+	/* Separate the positions by mindistance instructions. */
+	tmp = mindistance;
+	for (i = 1; i < numwarriors; i++) {
+		positions[i] += tmp;
+		tmp += mindistance;
+	}
+
+	/* Generate a "random" permutation of the positions. */
+	for (i = 1; i < numwarriors; i++) {
+		*seed = rng(*seed);
+		j = *seed % (numwarriors - 1) + i;
+		tmp = positions[j];
+		positions[j] = positions[i];
+		positions[i] = tmp;
+	}
+}
+
+/* Run a two warrior fight. Parameters are NOT checked for plausibility!
+ * Return the result after the fights or NULL on error. */
+u32_t *
+run(insn_t *core, warrior_t *warriors, u32_t coresize, u32_t maxprocesses,
+    u32_t maxcycles, u32_t mindistance, u32_t numrounds, u32_t seed)
+{
+	u32_t round; /* Number of the current round. */
+	u32_t *results; /* List with the results, format: w l t. */
+	u32_t pos2; /* Position of second warrior in the core. */
+	/* Available space in the core for second warrior. */
+	u32_t const space = coresize - 2 * mindistance + 1; 
+	u32_t cycle; /* Number of current cycle. */
+	pqueue_info_t pqueue_info1; /* Information about processes queue of
+				       first warrior. */
+	pqueue_info_t pqueue_info2; /* Information about processes queue of
+				       second warrior. */
+	pqueue_info_t *pqinfo;
+	insn_t **pqueue; /* Memory for the process queues. */
+	insn_t **pqueue_end;
+
+	insn_t *core_end = core + coresize;
+
+	void **tbl = calloc(176, sizeof(void *));
+	
+	tbl[0] = &&dat_direct_direct;
+	tbl[1] = &&invalid_insn;
+	tbl[2] = &&invalid_insn;
+	tbl[3] = &&invalid_insn;
+	tbl[4] = &&invalid_insn;
+	tbl[5] = &&dat_immediate_immediate;
+	tbl[6] = &&invalid_insn;
+	tbl[7] = &&dat_immediate_predecrement;
+	tbl[8] = &&invalid_insn;
+	tbl[9] = &&invalid_insn;
+	tbl[10] = &&invalid_insn;
+	tbl[11] = &&invalid_insn;
+	tbl[12] = &&invalid_insn;
+	tbl[13] = &&dat_predecrement_immediate;
+	tbl[14] = &&invalid_insn;
+	tbl[15] = &&dat_predecrement_predecrement;
+	tbl[16] = &&mov_direct_direct;
+	tbl[17] = &&invalid_insn;
+	tbl[18] = &&mov_direct_indirect;
+	tbl[19] = &&mov_direct_predecrement;
+	tbl[20] = &&mov_immediate_direct;
+	tbl[21] = &&invalid_insn;
+	tbl[22] = &&mov_immediate_indirect;
+	tbl[23] = &&mov_immediate_predecrement;
+	tbl[24] = &&mov_indirect_direct;
+	tbl[25] = &&invalid_insn;
+	tbl[26] = &&mov_indirect_indirect;
+	tbl[27] = &&mov_indirect_predecrement;
+	tbl[28] = &&mov_predecrement_direct;
+	tbl[29] = &&invalid_insn;
+	tbl[30] = &&mov_predecrement_indirect;
+	tbl[31] = &&mov_predecrement_predecrement;
+	tbl[32] = &&add_direct_direct;
+	tbl[33] = &&invalid_insn;
+	tbl[34] = &&add_direct_indirect;
+	tbl[35] = &&add_direct_predecrement;
+	tbl[36] = &&add_immediate_direct;
+	tbl[37] = &&invalid_insn;
+	tbl[38] = &&add_immediate_indirect;
+	tbl[39] = &&add_immediate_predecrement;
+	tbl[40] = &&add_indirect_direct;
+	tbl[41] = &&invalid_insn;
+	tbl[42] = &&add_indirect_indirect;
+	tbl[43] = &&add_indirect_predecrement;
+	tbl[44] = &&add_predecrement_direct;
+	tbl[45] = &&invalid_insn;
+	tbl[46] = &&add_predecrement_indirect;
+	tbl[47] = &&add_predecrement_predecrement;
+	tbl[48] = &&sub_direct_direct;
+	tbl[49] = &&invalid_insn;
+	tbl[50] = &&sub_direct_indirect;
+	tbl[51] = &&sub_direct_predecrement;
+	tbl[52] = &&sub_immediate_direct;
+	tbl[53] = &&invalid_insn;
+	tbl[54] = &&sub_immediate_indirect;
+	tbl[55] = &&sub_immediate_predecrement;
+	tbl[56] = &&sub_indirect_direct;
+	tbl[57] = &&invalid_insn;
+	tbl[58] = &&sub_indirect_indirect;
+	tbl[59] = &&sub_indirect_predecrement;
+	tbl[60] = &&sub_predecrement_direct;
+	tbl[61] = &&invalid_insn;
+	tbl[62] = &&sub_predecrement_indirect;
+	tbl[63] = &&sub_predecrement_predecrement;
+	tbl[64] = &&jmp_direct_direct;
+	tbl[65] = &&jmp_direct_immediate;
+	tbl[66] = &&jmp_direct_indirect;
+	tbl[67] = &&jmp_direct_predecrement;
+	tbl[68] = &&invalid_insn;
+	tbl[69] = &&invalid_insn;
+	tbl[70] = &&invalid_insn;
+	tbl[71] = &&invalid_insn;
+	tbl[72] = &&jmp_indirect_direct;
+	tbl[73] = &&jmp_indirect_immediate;
+	tbl[74] = &&jmp_indirect_indirect;
+	tbl[75] = &&jmp_indirect_predecrement;
+	tbl[76] = &&jmp_predecrement_direct;
+	tbl[77] = &&jmp_predecrement_immediate;
+	tbl[78] = &&jmp_predecrement_indirect;
+	tbl[79] = &&jmp_predecrement_predecrement;
+	tbl[80] = &&jmz_direct_direct;
+	tbl[81] = &&jmz_direct_immediate;
+	tbl[82] = &&jmz_direct_indirect;
+	tbl[83] = &&jmz_direct_predecrement;
+	tbl[84] = &&invalid_insn;
+	tbl[85] = &&invalid_insn;
+	tbl[86] = &&invalid_insn;
+	tbl[87] = &&invalid_insn;
+	tbl[88] = &&jmz_indirect_direct;
+	tbl[89] = &&jmz_indirect_immediate;
+	tbl[90] = &&jmz_indirect_indirect;
+	tbl[91] = &&jmz_indirect_predecrement;
+	tbl[92] = &&jmz_predecrement_direct;
+	tbl[93] = &&jmz_predecrement_immediate;
+	tbl[94] = &&jmz_predecrement_indirect;
+	tbl[95] = &&jmz_predecrement_predecrement;
+	tbl[96] = &&jmn_direct_direct;
+	tbl[97] = &&jmn_direct_immediate;
+	tbl[98] = &&jmn_direct_indirect;
+	tbl[99] = &&jmn_direct_predecrement;
+	tbl[100] = &&invalid_insn;
+	tbl[101] = &&invalid_insn;
+	tbl[102] = &&invalid_insn;
+	tbl[103] = &&invalid_insn;
+	tbl[104] = &&jmn_indirect_direct;
+	tbl[105] = &&jmn_indirect_immediate;
+	tbl[106] = &&jmn_indirect_indirect;
+	tbl[107] = &&jmn_indirect_predecrement;
+	tbl[108] = &&jmn_predecrement_direct;
+	tbl[109] = &&jmn_predecrement_immediate;
+	tbl[110] = &&jmn_predecrement_indirect;
+	tbl[111] = &&jmn_predecrement_predecrement;
+	tbl[112] = &&djn_direct_direct;
+	tbl[113] = &&djn_direct_immediate;
+	tbl[114] = &&djn_direct_indirect;
+	tbl[115] = &&djn_direct_predecrement;
+	tbl[116] = &&invalid_insn;
+	tbl[117] = &&invalid_insn;
+	tbl[118] = &&invalid_insn;
+	tbl[119] = &&invalid_insn;
+	tbl[120] = &&djn_indirect_direct;
+	tbl[121] = &&djn_indirect_immediate;
+	tbl[122] = &&djn_indirect_indirect;
+	tbl[123] = &&djn_indirect_predecrement;
+	tbl[124] = &&djn_predecrement_direct;
+	tbl[125] = &&djn_predecrement_immediate;
+	tbl[126] = &&djn_predecrement_indirect;
+	tbl[127] = &&djn_predecrement_predecrement;
+	tbl[128] = &&cmp_direct_direct;
+	tbl[129] = &&invalid_insn;
+	tbl[130] = &&cmp_direct_indirect;
+	tbl[131] = &&cmp_direct_predecrement;
+	tbl[132] = &&cmp_immediate_direct;
+	tbl[133] = &&invalid_insn;
+	tbl[134] = &&cmp_immediate_indirect;
+	tbl[135] = &&cmp_immediate_predecrement;
+	tbl[136] = &&cmp_indirect_direct;
+	tbl[137] = &&invalid_insn;
+	tbl[138] = &&cmp_indirect_indirect;
+	tbl[139] = &&cmp_indirect_predecrement;
+	tbl[140] = &&cmp_predecrement_direct;
+	tbl[141] = &&invalid_insn;
+	tbl[142] = &&cmp_predecrement_indirect;
+	tbl[143] = &&cmp_predecrement_predecrement;
+	tbl[144] = &&spl_direct_direct;
+	tbl[145] = &&spl_direct_immediate;
+	tbl[146] = &&spl_direct_indirect;
+	tbl[147] = &&spl_direct_predecrement;
+	tbl[148] = &&invalid_insn;
+	tbl[149] = &&invalid_insn;
+	tbl[150] = &&invalid_insn;
+	tbl[151] = &&invalid_insn;
+	tbl[152] = &&spl_indirect_direct;
+	tbl[153] = &&spl_indirect_immediate;
+	tbl[154] = &&spl_indirect_indirect;
+	tbl[155] = &&spl_indirect_predecrement;
+	tbl[156] = &&spl_predecrement_direct;
+	tbl[157] = &&spl_predecrement_immediate;
+	tbl[158] = &&spl_predecrement_indirect;
+	tbl[159] = &&spl_predecrement_predecrement;
+	tbl[160] = &&slt_direct_direct;
+	tbl[161] = &&invalid_insn;
+	tbl[162] = &&slt_direct_indirect;
+	tbl[163] = &&slt_direct_predecrement;
+	tbl[164] = &&slt_immediate_direct;
+	tbl[165] = &&invalid_insn;
+	tbl[166] = &&slt_immediate_indirect;
+	tbl[167] = &&slt_immediate_predecrement;
+	tbl[168] = &&slt_indirect_direct;
+	tbl[169] = &&invalid_insn;
+	tbl[170] = &&slt_indirect_indirect;
+	tbl[171] = &&slt_indirect_predecrement;
+	tbl[172] = &&slt_predecrement_direct;
+	tbl[173] = &&invalid_insn;
+	tbl[174] = &&slt_predecrement_indirect;
+	tbl[175] = &&slt_predecrement_predecrement;
+
+	/* Allocate memory for the process queues. */
+	pqueue = calloc(2 * maxprocesses + 2, sizeof(insn_t *));
+	if (pqueue == NULL) {
+		return NULL;
+	}
+	pqueue_end = pqueue + 2 * maxprocesses + 2;
+	
+	/* Allocate and initialize memory for results. */
+	results = calloc(3, sizeof(u32_t));
+	if (results == NULL) {
+		free (pqueue);
+		return NULL;
+	}
+	memset(results, 0, 3 * sizeof(u32_t));
+
+	/* Adjust seed to make the second warrior be at position seed in
+	 * the first round. */
+	seed -= mindistance;
+
+	/* No need to use field 'prev'. */
+	pqueue_info1.next = &pqueue_info2;
+	pqueue_info2.next = &pqueue_info1;
+	for (round = 0; round < numrounds; round++) {
+		/* Calculate position of second warrior. */
+		pos2 = mindistance + seed % space;
+		seed = rng(seed);
+		
+		/* Set up core and load warriors. */
+		memset(core, 0, coresize * sizeof(insn_t));
+		load_warrior(core, &warriors[0], 0, coresize);
+		load_warrior(core, &warriors[1], pos2, coresize);
+
+		/* Set up process queues. */
+		pqueue[0] = core + warriors[0].start;
+		pqueue_info1.head = pqueue;
+		pqueue_info1.tail = pqueue + 1;
+		pqueue_info1.numprocesses = 1;
+
+		pqueue[maxprocesses + 1] = core + pos2 + warriors[1].start;
+		pqueue_info2.head = pqueue + maxprocesses + 1;
+		pqueue_info2.tail = pqueue + maxprocesses + 2;
+		pqueue_info2.numprocesses = 1;
+
+		/* Set execution order of warriors. */
+		if (round % 2 == 0) {
+			pqinfo = &pqueue_info1;
+		} else {
+			pqinfo = &pqueue_info2;
+		}
+
+		/* Run one round. */
+		cycle = 2 * maxcycles;
+			insn_t *ip;    /* Pointer to the currently executed
+				        * instruction. */
+			u32_t ra_b;    /* A register value */
+			u32_t rb_b;    /* B register value */
+			insn_t *aAddr; /* Pointer to address specified by
+					* A operand. */
+			insn_t *bAddr; /* Pointer to address specified by
+					* B operand. */
+
+#define in_a ra_a
+#define in_b rb_b
+
+			/* Get current instruction pointer and remove it
+			 * from the queue. The number of processes isn't
+			 * changed, because it usually doesn't, but see the
+			 * special cases SPL and DAT! */
+start_insn:		ip = *pqinfo->head++;
+			if (pqinfo->head == pqueue_end) pqinfo->head = pqueue;
+
+			/* Switch on opcode/amode/bmode. */
+			goto *tbl[ip->insn];
+
+			/*
+	 		 * MOV
+	 		 */
+mov_direct_direct:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				/* Copy complete instruction. */
+				*bAddr = *aAddr;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+mov_direct_indirect:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				/* Copy complete instruction. */
+				*bAddr = *aAddr;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+mov_direct_predecrement:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = ra_b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+mov_predecrement_direct:
+				in_b = ip->b; /* Save value, because it might
+					       * be changed by A operand. */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);	
+
+				/* Copy complete instruction. */
+				*bAddr = *aAddr;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+mov_predecrement_indirect:
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);	
+				
+				/* Copy complete instruction. */
+				*bAddr = *aAddr;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+mov_predecrement_predecrement:
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b;
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);	
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = ra_b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+mov_indirect_direct:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				/* Copy complete instruction. */
+				*bAddr = *aAddr;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+mov_indirect_indirect:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+				
+				/* Copy complete instruction. */
+				*bAddr = *aAddr;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+mov_indirect_predecrement:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b;
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = ra_b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+mov_immediate_direct:
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				/* Copy A field to B field. */
+				bAddr->b = ip->a;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+mov_immediate_indirect:
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+						
+				/* Copy A field to B field. */
+				bAddr->b = ip->a;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+mov_immediate_predecrement:
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+						
+				/* Copy A field to B field. */
+				bAddr->b = ip->a;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+			/*
+	 		 * SPL
+	 		 */
+spl_direct_immediate:
+spl_direct_direct:
+spl_direct_indirect:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+		
+				/* No need to evaluate B operand. */
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+spl_direct_predecrement:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);	
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+spl_indirect_immediate:
+spl_indirect_direct:
+spl_indirect_indirect:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* No need to evaluate B operand. */
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+spl_indirect_predecrement:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+spl_predecrement_immediate:
+spl_predecrement_direct:
+spl_predecrement_indirect:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* No need to evaluate B operand. */
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+spl_predecrement_predecrement:
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+		
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+			/*
+			 * DAT
+			 */
+dat_immediate_immediate:
+				/* Current process dies. Finish this
+				 * round, if warrior is dead. */
+				if (--pqinfo->numprocesses == 0) cycle = 1;
+				goto end_insn;
+dat_direct_direct:
+				/* DAT $ x, $ y isn't a valid instruction,
+				 * but can be executed nonetheless! */
+
+				/* Current process dies. Finish this						 * round, if warrior is dead. */
+				if (--pqinfo->numprocesses == 0) cycle = 1;
+				goto end_insn;
+dat_immediate_predecrement:
+				/* Partially evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+
+				/* Current process dies. Finish this round,
+				 * if warrior is dead. */
+				if (--pqinfo->numprocesses == 0) cycle = 1;
+				goto end_insn;
+dat_predecrement_immediate:
+				/* Partially evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+
+				/* Current process dies. Finish this round,
+				 * if warrior is dead. */
+				if (--pqinfo->numprocesses == 0) cycle = 1;
+				goto end_insn;
+dat_predecrement_predecrement:
+				in_b = ip->b;
+
+				/* Partially evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+
+				/* Partially evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+
+				/* Current process dies. Finish this round,
+				 * if warrior is dead. */
+				if (--pqinfo->numprocesses == 0) cycle = 1;
+				goto end_insn;
+			/*
+			 * JMP
+			 */
+jmp_direct_immediate:
+jmp_direct_direct:
+jmp_direct_indirect:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* No need to evaluate B operand. */
+	
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				goto end_insn;
+jmp_direct_predecrement:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				goto end_insn;
+jmp_indirect_immediate:
+jmp_indirect_direct:
+jmp_indirect_indirect:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* No need to evaluate B operand. */
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				goto end_insn;
+jmp_indirect_predecrement:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				goto end_insn;
+jmp_predecrement_immediate:
+jmp_predecrement_direct:
+jmp_predecrement_indirect:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* No need to evaluate B operand. */
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				goto end_insn;
+jmp_predecrement_predecrement:
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				goto end_insn;
+			/*
+			 * DJN
+			 */
+djn_direct_immediate:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				/* Nothing to do. */
+
+				DECMOD(ip->b);
+				if (ip->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+djn_direct_direct:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+djn_direct_indirect:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+djn_direct_predecrement:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+djn_indirect_immediate:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				/* Nothing to do. */
+
+				DECMOD(ip->b);
+				if (ip->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+djn_indirect_direct:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+djn_indirect_indirect:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+djn_indirect_predecrement:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+djn_predecrement_immediate:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				/* Nothing to do. */
+
+				DECMOD(ip->b);
+				if (ip->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+djn_predecrement_direct:
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+djn_predecrement_indirect:
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+djn_predecrement_predecrement:
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				goto end_insn;
+			/*
+			 * ADD
+			 */
+add_immediate_direct:
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				ADDMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+add_immediate_indirect:
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+add_immediate_predecrement:
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+add_direct_direct:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+add_direct_indirect:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+add_direct_predecrement:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+add_indirect_direct:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+add_indirect_indirect:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+add_indirect_predecrement:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+add_predecrement_direct:
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+add_predecrement_indirect:
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+add_predecrement_predecrement:
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+			/*
+			 * SUB
+			 */
+sub_immediate_direct:
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				SUBMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+sub_immediate_indirect:
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+sub_immediate_predecrement:
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+sub_direct_direct:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+sub_direct_indirect:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+sub_direct_predecrement:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+sub_indirect_direct:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+sub_indirect_indirect:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+sub_indirect_predecrement:
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+sub_predecrement_direct:
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+sub_predecrement_indirect:
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+sub_predecrement_predecrement:
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+			/*
+			 * JMZ
+			 */
+jmz_direct_immediate:
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				if (ip->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmz_direct_direct:
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmz_direct_indirect:
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmz_direct_predecrement:
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmz_indirect_immediate:
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				/* Nothing to do. */
+
+				if (ip->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmz_indirect_direct:
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmz_indirect_indirect:
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmz_indirect_predecrement:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmz_predecrement_immediate:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				if (ip->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmz_predecrement_direct:
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				if (bAddr->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmz_predecrement_indirect:
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmz_predecrement_predecrement:
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+			/*
+			 * JMN
+			 */
+jmn_direct_immediate:
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				/* Nothing to do. */
+
+				if (ip->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmn_direct_direct:
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmn_direct_indirect:
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmn_direct_predecrement:
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmn_indirect_immediate:
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				/* Nothing to do. */
+
+				if (ip->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmn_indirect_direct:
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmn_indirect_indirect:
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmn_indirect_predecrement:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmn_predecrement_immediate:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				if (ip->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmn_predecrement_direct:
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				if (bAddr->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmn_predecrement_indirect:
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+jmn_predecrement_predecrement:
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				goto end_insn;
+			/*
+			 * CMP
+			 */
+cmp_immediate_direct:
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (ip->a == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+cmp_immediate_indirect:
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ip->a == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+cmp_immediate_predecrement:
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ip->a == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+cmp_direct_direct:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+cmp_direct_indirect:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+cmp_direct_predecrement:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    ra_b        == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+cmp_indirect_direct:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+cmp_indirect_indirect:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+cmp_indirect_predecrement:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    ra_b        == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+cmp_predecrement_direct:
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+cmp_predecrement_indirect:
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+		
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+		   		    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+cmp_predecrement_predecrement:
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    ra_b        == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+			/*
+			 * SLT
+			 */
+slt_immediate_direct:
+				/* Evalute A operand. */
+				/* Nothing to do. */
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (ip->a < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+slt_immediate_indirect:
+				/* Evalute A operand. */
+				/* Nothing to do. */
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ip->a < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+slt_immediate_predecrement:
+				/* Evalute A operand. */
+				/* Nothing to do. */
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ip->a < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+slt_direct_direct:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+slt_direct_indirect:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+				
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+slt_direct_predecrement:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ra_b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+slt_indirect_direct:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+slt_indirect_indirect:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+slt_indirect_predecrement:
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ra_b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+slt_predecrement_direct:
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+slt_predecrement_indirect:
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+slt_predecrement_predecrement:
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ra_b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				goto end_insn;
+invalid_insn:
+				/* This shouldn't happen. */
+				printf("Invalid instruction found. "\
+				       "You have a problem!\n");
+end_insn:			
+			pqinfo = pqinfo->next; /* Switch to next warrior. */
+			if (--cycle > 0) goto start_insn;
+
+		/* Accumulate results. */
+		if (pqueue_info1.numprocesses == 0) {
+			results[1]++; /* First warrior has lost. */
+		} else if (pqueue_info2.numprocesses == 0) {
+			results[0]++; /* First warrior has won. */
+		} else {
+			results[2]++; /* Tie. */
+		}
+	}	
+	/* Clean up. */
+	free(pqueue);
+
+	return results;
+}
+
+/* Run a two warrior fight with all possible start positions. Parameters are
+ * NOT checked for plausibility! Return the result after the fights or NULL
+ * on error. */
+u32_t *
+p_run(insn_t *core, warrior_t *warriors, u32_t coresize, u32_t maxprocesses,
+      u32_t maxcycles, u32_t mindistance)
+{
+	u32_t round; /* Number of the current round. */
+	u32_t *results; /* List with the results, format: w l t. */
+	u32_t cycle; /* Number of current cycle. */
+	u32_t pos2; /* Position of second warrior in core. */
+	pqueue_info_t pqueue_info1; /* Information about processes queue of
+				       first warrior. */
+	pqueue_info_t pqueue_info2; /* Information about processes queue of
+				       second warrior. */
+	pqueue_info_t *pqinfo;
+	insn_t **pqueue; /* Memory for the process queues. */
+	insn_t **pqueue_end;
+
+	insn_t *core_end = core + coresize;
+	
+	/* Allocate memory for the process queues. */
+	pqueue = calloc(2 * maxprocesses + 2, sizeof(insn_t *));
+	if (pqueue == NULL) {
+		return NULL;
+	}
+	pqueue_end = pqueue + 2 * maxprocesses + 2;
+	
+	/* Allocate and initialize memory for results. */
+	results = calloc(3, sizeof(u32_t));
+	if (results == NULL) {
+		free (pqueue);
+		return NULL;
+	}
+	memset(results, 0, 3 * sizeof(u32_t));
+
+	/* No need to use field 'prev'. */
+	pqueue_info1.next = &pqueue_info2;
+	pqueue_info2.next = &pqueue_info1;
+	for (round = 0; round < 2 * (coresize - 2*mindistance + 1); round++) {
+		pos2 = mindistance + round/2;
+		
+		/* Set up core and load warriors. */
+		memset(core, 0, coresize * sizeof(insn_t));
+		load_warrior(core, &warriors[0], 0, coresize);
+		load_warrior(core, &warriors[1], pos2, coresize);
+
+		/* Set up process queues. */
+		pqueue[0] = core + warriors[0].start;
+		pqueue_info1.head = pqueue;
+		pqueue_info1.tail = pqueue + 1;
+		pqueue_info1.numprocesses = 1;
+
+		pqueue[maxprocesses + 1] = core + pos2 + warriors[1].start;
+		pqueue_info2.head = pqueue + maxprocesses + 1;
+		pqueue_info2.tail = pqueue + maxprocesses + 2;
+		pqueue_info2.numprocesses = 1;
+
+		/* Set execution order of warriors. */
+		if (round % 2 == 0) {
+			pqinfo = &pqueue_info1;
+		} else {
+			pqinfo = &pqueue_info2;
+		}
+
+		/* Run one round. */
+		cycle = 2 * maxcycles;
+		do {
+			insn_t *ip;    /* Pointer to the currently executed
+				        * instruction. */
+			u32_t ra_b;    /* A register value */
+			u32_t rb_b;    /* B register value */
+			insn_t *aAddr; /* Pointer to address specified by
+					* A operand. */
+			insn_t *bAddr; /* Pointer to address specified by
+					* B operand. */
+
+#define in_a ra_a
+#define in_b rb_b
+
+			/* Get current instruction pointer and remove it
+			 * from the queue. The number of processes isn't
+			 * changed, because it usually doesn't, but see the
+			 * special cases SPL and DAT! */
+			ip = *pqinfo->head++;
+			if (pqinfo->head == pqueue_end) pqinfo->head = pqueue;
+
+			/* switch on opcode/amode/bmode */
+			switch (ip->insn) {
+			/*
+	 		 * MOV
+	 		 */
+			case INSN_88(MOV, DIRECT, DIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = aAddr->b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, DIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = aAddr->b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, DIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * A operand. */
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = ra_b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, PREDECREMENT, DIRECT):
+				in_b = ip->b; /* Save value, because it might
+					       * be changed by A operand. */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);	
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = aAddr->b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, PREDECREMENT, INDIRECT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);	
+				
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = aAddr->b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				ra_b = aAddr->b;
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);	
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = ra_b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, INDIRECT, DIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = aAddr->b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, INDIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+				
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = aAddr->b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, INDIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b;
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = ra_b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, IMMEDIATE, DIRECT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				/* Copy A field to B field. */
+				bAddr->b = ip->a;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, IMMEDIATE, INDIRECT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+						
+				/* Copy A field to B field. */
+				bAddr->b = ip->a;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, IMMEDIATE, PREDECREMENT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+						
+				/* Copy A field to B field. */
+				bAddr->b = ip->a;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			/*
+	 		 * SPL
+	 		 */
+			case INSN_88(SPL, DIRECT, IMMEDIATE):
+			case INSN_88(SPL, DIRECT, DIRECT):
+			case INSN_88(SPL, DIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+		
+				/* No need to evaluate B operand. */
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(SPL, DIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* No need to evaluate B operand. */
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);	
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(SPL, INDIRECT, IMMEDIATE):
+			case INSN_88(SPL, INDIRECT, DIRECT):
+			case INSN_88(SPL, INDIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* No need to evaluate B operand. */
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(SPL, INDIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(SPL, PREDECREMENT, IMMEDIATE):
+			case INSN_88(SPL, PREDECREMENT, DIRECT):
+			case INSN_88(SPL, PREDECREMENT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* No need to evaluate B operand. */
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(SPL, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+		
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			/*
+			 * DAT
+			 */
+			case INSN_88(DAT, IMMEDIATE, IMMEDIATE):
+				/* Current process dies. Finish this
+				 * round, if warrior is dead. */
+				if (--pqinfo->numprocesses == 0) cycle = 1;
+				break;
+			case INSN_88(DAT, DIRECT, DIRECT):
+				/* DAT $ x, $ y isn't a valid instruction,
+				 * but can be executed nonetheless! */
+
+				/* Current process dies. Finish this						 * round, if warrior is dead. */
+				if (--pqinfo->numprocesses == 0) cycle = 1;
+				break;
+			case INSN_88(DAT, IMMEDIATE, PREDECREMENT):
+				/* Partially evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+
+				/* Current process dies. Finish this round,
+				 * if warrior is dead. */
+				if (--pqinfo->numprocesses == 0) cycle = 1;
+				break;
+			case INSN_88(DAT, PREDECREMENT, IMMEDIATE):
+				/* Partially evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+
+				/* Current process dies. Finish this round,
+				 * if warrior is dead. */
+				if (--pqinfo->numprocesses == 0) cycle = 1;
+				break;
+			case INSN_88(DAT, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Partially evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+
+				/* Partially evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+
+				/* Current process dies. Finish this round,
+				 * if warrior is dead. */
+				if (--pqinfo->numprocesses == 0) cycle = 1;
+				break;
+			/*
+			 * JMP
+			 */
+			case INSN_88(JMP, DIRECT, IMMEDIATE):
+			case INSN_88(JMP, DIRECT, DIRECT):
+			case INSN_88(JMP, DIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* No need to evaluate B operand. */
+	
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				break;
+			case INSN_88(JMP, DIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				break;
+			case INSN_88(JMP, INDIRECT, IMMEDIATE):
+			case INSN_88(JMP, INDIRECT, DIRECT):
+			case INSN_88(JMP, INDIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* No need to evaluate B operand. */
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				break;
+			case INSN_88(JMP, INDIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				break;
+			case INSN_88(JMP, PREDECREMENT, IMMEDIATE):
+			case INSN_88(JMP, PREDECREMENT, DIRECT):
+			case INSN_88(JMP, PREDECREMENT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* No need to evaluate B operand. */
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				break;
+			case INSN_88(JMP, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				break;
+			/*
+			 * DJN
+			 */
+			case INSN_88(DJN, DIRECT, IMMEDIATE):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				/* Nothing to do. */
+
+				DECMOD(ip->b);
+				if (ip->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, DIRECT, DIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, DIRECT, INDIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, DIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, INDIRECT, IMMEDIATE):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				/* Nothing to do. */
+
+				DECMOD(ip->b);
+				if (ip->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, INDIRECT, DIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, INDIRECT, INDIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, INDIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, PREDECREMENT, IMMEDIATE):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				/* Nothing to do. */
+
+				DECMOD(ip->b);
+				if (ip->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, PREDECREMENT, DIRECT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, PREDECREMENT, INDIRECT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			/*
+			 * ADD
+			 */
+			case INSN_88(ADD, IMMEDIATE, DIRECT):
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				ADDMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, IMMEDIATE, INDIRECT):
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, IMMEDIATE, PREDECREMENT):
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, DIRECT, DIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, DIRECT, INDIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, DIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, INDIRECT, DIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, INDIRECT, INDIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, INDIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, PREDECREMENT, DIRECT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, PREDECREMENT, INDIRECT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			/*
+			 * SUB
+			 */
+			case INSN_88(SUB, IMMEDIATE, DIRECT):
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				SUBMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, IMMEDIATE, INDIRECT):
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, IMMEDIATE, PREDECREMENT):
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, DIRECT, DIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, DIRECT, INDIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, DIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, INDIRECT, DIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, INDIRECT, INDIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, INDIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, PREDECREMENT, DIRECT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, PREDECREMENT, INDIRECT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			/*
+			 * JMZ
+			 */
+			case INSN_88(JMZ, DIRECT, IMMEDIATE):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				if (ip->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, DIRECT, DIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, DIRECT, INDIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, DIRECT, PREDECREMENT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, INDIRECT, IMMEDIATE):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				/* Nothing to do. */
+
+				if (ip->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, INDIRECT, DIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, INDIRECT, INDIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, INDIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, PREDECREMENT, IMMEDIATE):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				if (ip->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, PREDECREMENT, DIRECT):
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				if (bAddr->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, PREDECREMENT, INDIRECT):
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			/*
+			 * JMN
+			 */
+			case INSN_88(JMN, DIRECT, IMMEDIATE):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				if (ip->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, DIRECT, DIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, DIRECT, INDIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, DIRECT, PREDECREMENT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, INDIRECT, IMMEDIATE):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				/* Nothing to do. */
+
+				if (ip->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, INDIRECT, DIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, INDIRECT, INDIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, INDIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, PREDECREMENT, IMMEDIATE):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				if (ip->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, PREDECREMENT, DIRECT):
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				if (bAddr->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, PREDECREMENT, INDIRECT):
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			/*
+			 * CMP
+			 */
+			case INSN_88(CMP, IMMEDIATE, DIRECT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (ip->a == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, IMMEDIATE, INDIRECT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ip->a == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, IMMEDIATE, PREDECREMENT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ip->a == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, DIRECT, DIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, DIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, DIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, INDIRECT, DIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, INDIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, INDIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, PREDECREMENT, DIRECT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, PREDECREMENT, INDIRECT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+		
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+		   		    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			/*
+			 * SLT
+			 */
+			case INSN_88(SLT, IMMEDIATE, DIRECT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (ip->a < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, IMMEDIATE, INDIRECT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ip->a < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, IMMEDIATE, PREDECREMENT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ip->a < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, DIRECT, DIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, DIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+				
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, DIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, INDIRECT, DIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, INDIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, INDIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, PREDECREMENT, DIRECT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, PREDECREMENT, INDIRECT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			default:
+				/* This shouldn't happen. */
+				printf("Invalid instruction found. "\
+				       "You have a problem!\n");
+			}
+			
+			pqinfo = pqinfo->next; /* Switch to next warrior. */
+		} while (--cycle);
+
+		/* Accumulate results. */
+		if (pqueue_info1.numprocesses == 0) {
+			results[1]++; /* First warrior has lost. */
+		} else if (pqueue_info2.numprocesses == 0) {
+			results[0]++; /* First warrior has won. */
+		} else {
+			results[2]++; /* Tie. */
+		}
+	}
+
+	/* Clean up. */
+	free(pqueue);
+	
+	return results;
+}
+
+/* Run a multiwarrior fight. Parameters are NOT checked for plausibility!
+ * Return the result after the fights or NULL on error. */
+u32_t *
+mw_run(insn_t *core, u32_t numwarriors, warrior_t *warriors, u32_t coresize,
+       u32_t maxprocesses, u32_t maxcycles, u32_t mindistance, u32_t numrounds,
+       u32_t seed)
+{
+	u32_t round; /* Number of the current round. */
+	u32_t *results; /* List with the results. */
+	u32_t *positions; /* List of the positions of all warriors. */
+	u32_t cycle; /* Number of current cycle. */
+	pqueue_info_t *pqinfos; /* Information about the process queues of
+				  all warriors. */
+	pqueue_info_t *pqinfo;
+	insn_t **pqueue; /* Memory for the process queues. */
+	insn_t **pqueue_end;
+	insn_t **tmp_pqueue;
+
+	u32_t numalive; /* Number of living warriors for current round. */
+	u32_t i;
+
+	insn_t *core_end = core + coresize;
+	
+	/* Allocate memory for the process queues. */
+	pqueue = calloc(numwarriors * (maxprocesses + 1), sizeof(insn_t *));
+	if (pqueue == NULL) {
+		return NULL;
+	}
+	pqueue_end = pqueue + numwarriors * (maxprocesses + 1);
+	
+	/* Allocate memory for the information about the process queues. */
+	pqinfos = calloc(numwarriors, sizeof(pqueue_info_t));
+	if (pqinfos == NULL) {
+		free(pqueue);
+		return NULL;
+	}
+	
+	/* Allocate and initialize memory for results. */
+	results = calloc(numwarriors * (numwarriors + 1), sizeof(u32_t));
+	if (results == NULL) {
+		free(pqinfos);
+		free(pqueue);
+		return NULL;
+	}
+	memset(results, 0, numwarriors * (numwarriors + 1) * sizeof(u32_t));
+
+	/* Allocate memory for positions of warriors. */
+	positions = calloc(numwarriors, sizeof(u32_t));
+	if (positions == NULL) {
+		free(results);
+		free(pqinfos);
+		free(pqueue);
+		return NULL;
+	}
+	
+	/* Adjust seed to make the second warrior be at position seed in
+	 * the first round. */
+	seed -= mindistance;
+
+	/* "First" warrior is always at position 0. */
+	positions[0] = 0;
+	
+	for (round = 0; round < numrounds; round++) {
+		/* Calculate position of each warrior. */
+		if (calc_pos(positions, numwarriors, coresize, mindistance,
+			     &seed)) {
+			calc_pos_backup(positions, numwarriors, coresize,
+					mindistance, &seed);
+		}
+		
+		/* Set up core, load warriors into core and setup all
+		 * process queues. */
+		memset(core, 0, coresize * sizeof(insn_t));
+		tmp_pqueue = pqueue;
+		for (i = 0; i < numwarriors; i++) {
+			load_warrior(core, &warriors[i], positions[i],
+				     coresize);
+			
+			*tmp_pqueue = core + (positions[i] + 
+				      warriors[i].start) % coresize;
+			pqinfos[i].head = tmp_pqueue;
+			pqinfos[i].tail = tmp_pqueue + 1;
+			pqinfos[i].numprocesses = 1;
+
+			pqinfos[i].next = &pqinfos[(i + 1) % numwarriors];
+			pqinfos[i].prev = &pqinfos[(i + numwarriors - 1) % 
+				                   numwarriors];
+
+			tmp_pqueue += maxprocesses + 1;
+		}
+
+		/* Set first warrior to execute. */
+		pqinfo = &pqinfos[round % numwarriors];
+
+		/* Run one round. */
+		cycle = numwarriors * maxcycles;
+		numalive = numwarriors;
+		do {
+			insn_t *ip;    /* Pointer to the currently executed
+				        * instruction. */
+			u32_t ra_b;    /* A register value */
+			u32_t rb_b;    /* B register value */
+			insn_t *aAddr; /* Pointer to address specified by
+					* A operand. */
+			insn_t *bAddr; /* Pointer to address specified by
+					* B operand. */
+
+#define in_a ra_a
+#define in_b rb_b
+
+			/* Get current instruction pointer and remove it
+			 * from the queue. The number of processes isn't
+			 * changed, because it usually doesn't, but see the
+			 * special cases SPL and DAT! */
+			ip = *pqinfo->head++;
+			if (pqinfo->head == pqueue_end) pqinfo->head = pqueue;
+
+			/* switch on opcode/amode/bmode */
+			switch (ip->insn) {
+			/*
+	 		 * MOV
+	 		 */
+			case INSN_88(MOV, DIRECT, DIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = aAddr->b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, DIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = aAddr->b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, DIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * A operand. */
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = ra_b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, PREDECREMENT, DIRECT):
+				in_b = ip->b; /* Save value, because it might
+					       * be changed by A operand. */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);	
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = aAddr->b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, PREDECREMENT, INDIRECT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);	
+				
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = aAddr->b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				ra_b = aAddr->b;
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);	
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = ra_b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, INDIRECT, DIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = aAddr->b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, INDIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+				
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = aAddr->b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, INDIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b;
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				/* Copy complete instruction. */
+				bAddr->insn = aAddr->insn;
+				bAddr->a = aAddr->a;
+				bAddr->b = ra_b;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, IMMEDIATE, DIRECT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				/* Copy A field to B field. */
+				bAddr->b = ip->a;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, IMMEDIATE, INDIRECT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+						
+				/* Copy A field to B field. */
+				bAddr->b = ip->a;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(MOV, IMMEDIATE, PREDECREMENT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+						
+				/* Copy A field to B field. */
+				bAddr->b = ip->a;
+		
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			/*
+	 		 * SPL
+	 		 */
+			case INSN_88(SPL, DIRECT, IMMEDIATE):
+			case INSN_88(SPL, DIRECT, DIRECT):
+			case INSN_88(SPL, DIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+		
+				/* No need to evaluate B operand. */
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(SPL, DIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* No need to evaluate B operand. */
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);	
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(SPL, INDIRECT, IMMEDIATE):
+			case INSN_88(SPL, INDIRECT, DIRECT):
+			case INSN_88(SPL, INDIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* No need to evaluate B operand. */
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(SPL, INDIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(SPL, PREDECREMENT, IMMEDIATE):
+			case INSN_88(SPL, PREDECREMENT, DIRECT):
+			case INSN_88(SPL, PREDECREMENT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* No need to evaluate B operand. */
+
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(SPL, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+		
+				/* Queue next instruction */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+
+				/* Queue new process, if possible. */
+				if (pqinfo->numprocesses < maxprocesses) {
+					pqinfo->numprocesses++;
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			/*
+			 * DAT
+			 */
+			case INSN_88(DAT, IMMEDIATE, IMMEDIATE):
+				if (pqinfo->numprocesses == 0) {
+					/* Adjust list of living warriors. */
+					pqinfo->prev->next = pqinfo->next;
+					pqinfo->next->prev = pqinfo->prev;
+
+					/* Adjust number of remaining cycles
+					 * for living warriors. */
+					cycle = cycle - cycle/numalive;
+				
+					numalive--;
+				}
+				break;
+			case INSN_88(DAT, DIRECT, DIRECT):
+				/* DAT $ x, $ y isn't a valid instruction,
+				 * but can be executed nonetheless! */
+
+				if (pqinfo->numprocesses == 0) {
+					/* Adjust list of living warriors. */
+					pqinfo->prev->next = pqinfo->next;
+					pqinfo->next->prev = pqinfo->prev;
+
+					/* Adjust number of remaining cycles
+					 * for living warriors. */
+					cycle = cycle - cycle/numalive;
+				
+					numalive--;
+				}
+				break;
+			case INSN_88(DAT, IMMEDIATE, PREDECREMENT):
+				/* Partially evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+
+				if (pqinfo->numprocesses == 0) {
+					/* Adjust list of living warriors. */
+					pqinfo->prev->next = pqinfo->next;
+					pqinfo->next->prev = pqinfo->prev;
+
+					/* Adjust number of remaining cycles
+					 * for living warriors. */
+					cycle = cycle - cycle/numalive;
+				
+					numalive--;
+				}
+				break;
+			case INSN_88(DAT, PREDECREMENT, IMMEDIATE):
+				/* Partially evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				
+				if (pqinfo->numprocesses == 0) {
+					/* Adjust list of living warriors. */
+					pqinfo->prev->next = pqinfo->next;
+					pqinfo->next->prev = pqinfo->prev;
+
+					/* Adjust number of remaining cycles
+					 * for living warriors. */
+					cycle = cycle - cycle/numalive;
+				
+					numalive--;
+				}
+				break;
+			case INSN_88(DAT, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Partially evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				
+				/* Partially evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+
+				if (pqinfo->numprocesses == 0) {
+					/* Adjust list of living warriors. */
+					pqinfo->prev->next = pqinfo->next;
+					pqinfo->next->prev = pqinfo->prev;
+
+					/* Adjust number of remaining cycles
+					 * for living warriors. */
+					cycle = cycle - cycle/numalive;
+				
+					numalive--;
+				}
+				break;
+			/*
+			 * JMP
+			 */
+			case INSN_88(JMP, DIRECT, IMMEDIATE):
+			case INSN_88(JMP, DIRECT, DIRECT):
+			case INSN_88(JMP, DIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* No need to evaluate B operand. */
+	
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				break;
+			case INSN_88(JMP, DIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				break;
+			case INSN_88(JMP, INDIRECT, IMMEDIATE):
+			case INSN_88(JMP, INDIRECT, DIRECT):
+			case INSN_88(JMP, INDIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* No need to evaluate B operand. */
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				break;
+			case INSN_88(JMP, INDIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				break;
+			case INSN_88(JMP, PREDECREMENT, IMMEDIATE):
+			case INSN_88(JMP, PREDECREMENT, DIRECT):
+			case INSN_88(JMP, PREDECREMENT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* No need to evaluate B operand. */
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				break;
+			case INSN_88(JMP, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Partially evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+
+				/* Queue jump destination. */
+				PQUEUE_APPEND(aAddr);
+				break;
+			/*
+			 * DJN
+			 */
+			case INSN_88(DJN, DIRECT, IMMEDIATE):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				/* Nothing to do. */
+
+				DECMOD(ip->b);
+				if (ip->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, DIRECT, DIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, DIRECT, INDIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, DIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, INDIRECT, IMMEDIATE):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				/* Nothing to do. */
+
+				DECMOD(ip->b);
+				if (ip->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, INDIRECT, DIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, INDIRECT, INDIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, INDIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, PREDECREMENT, IMMEDIATE):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				/* Nothing to do. */
+
+				DECMOD(ip->b);
+				if (ip->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, PREDECREMENT, DIRECT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, PREDECREMENT, INDIRECT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			case INSN_88(DJN, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				DECMOD(bAddr->b);
+				if (bAddr->b == 0) {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				} else {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				}
+				break;
+			/*
+			 * ADD
+			 */
+			case INSN_88(ADD, IMMEDIATE, DIRECT):
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				ADDMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, IMMEDIATE, INDIRECT):
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, IMMEDIATE, PREDECREMENT):
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, DIRECT, DIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, DIRECT, INDIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, DIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, INDIRECT, DIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, INDIRECT, INDIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, INDIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, PREDECREMENT, DIRECT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, PREDECREMENT, INDIRECT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(ADD, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				ADDMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				ADDMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			/*
+			 * SUB
+			 */
+			case INSN_88(SUB, IMMEDIATE, DIRECT):
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				SUBMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, IMMEDIATE, INDIRECT):
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, IMMEDIATE, PREDECREMENT):
+				/* Evaluate A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->b, bAddr->b, ip->a, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, DIRECT, DIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, DIRECT, INDIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, DIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, INDIRECT, DIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, INDIRECT, INDIRECT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, INDIRECT, PREDECREMENT):
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, PREDECREMENT, DIRECT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, PREDECREMENT, INDIRECT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, aAddr->b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SUB, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evaluate A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+				ra_b = aAddr->b; /* Save value, because it
+						  * might be changed by
+						  * B operand. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				SUBMOD(bAddr->a, bAddr->a, aAddr->a, coresize);
+				SUBMOD(bAddr->b, bAddr->b, ra_b, coresize);
+
+				/* Queue next instruction. */
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			/*
+			 * JMZ
+			 */
+			case INSN_88(JMZ, DIRECT, IMMEDIATE):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				if (ip->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, DIRECT, DIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, DIRECT, INDIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, DIRECT, PREDECREMENT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, INDIRECT, IMMEDIATE):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				/* Nothing to do. */
+
+				if (ip->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, INDIRECT, DIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, INDIRECT, INDIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, INDIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, PREDECREMENT, IMMEDIATE):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				if (ip->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, PREDECREMENT, DIRECT):
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				if (bAddr->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, PREDECREMENT, INDIRECT):
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMZ, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b == 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			/*
+			 * JMN
+			 */
+			case INSN_88(JMN, DIRECT, IMMEDIATE):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				if (ip->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, DIRECT, DIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, DIRECT, INDIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, DIRECT, PREDECREMENT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, INDIRECT, IMMEDIATE):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				/* Nothing to do. */
+
+				if (ip->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, INDIRECT, DIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, INDIRECT, INDIRECT):
+				/* Evaluate B operand first, because in this
+				 * case no harm can be done. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Evalute A operand. */
+					ASSIGNADDR(aAddr, ip, ip->a);
+					ADDADDR(aAddr, aAddr->b);
+
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* No need to evalute A operand. */
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, INDIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, PREDECREMENT, IMMEDIATE):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				if (ip->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, PREDECREMENT, DIRECT):
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				if (bAddr->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, PREDECREMENT, INDIRECT):
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			case INSN_88(JMN, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b; /* == rb_b !!! */
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (bAddr->b != 0) {
+					/* Queue jump destination. */
+					PQUEUE_APPEND(aAddr);
+				} else {
+					/* Queue next instruction. */
+					IPINCMOD(ip);
+					PQUEUE_APPEND(ip);
+				}
+				break;
+			/*
+			 * CMP
+			 */
+			case INSN_88(CMP, IMMEDIATE, DIRECT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (ip->a == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, IMMEDIATE, INDIRECT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ip->a == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, IMMEDIATE, PREDECREMENT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ip->a == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, DIRECT, DIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, DIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, DIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, INDIRECT, DIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, INDIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, INDIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, PREDECREMENT, DIRECT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, PREDECREMENT, INDIRECT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+		
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+		   		    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(CMP, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evaluate B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->insn == bAddr->insn &&
+				    aAddr->a    == bAddr->a &&
+				    aAddr->b    == bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			/*
+			 * SLT
+			 */
+			case INSN_88(SLT, IMMEDIATE, DIRECT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (ip->a < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, IMMEDIATE, INDIRECT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ip->a < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, IMMEDIATE, PREDECREMENT):
+				/* Evalute A operand. */
+				/* Nothing to do. */
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (ip->a < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, DIRECT, DIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, DIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+				
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, DIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, INDIRECT, DIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, INDIRECT, INDIRECT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, INDIRECT, PREDECREMENT):
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				ADDADDR(aAddr, aAddr->b);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, ip->b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, PREDECREMENT, DIRECT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, PREDECREMENT, INDIRECT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			case INSN_88(SLT, PREDECREMENT, PREDECREMENT):
+				in_b = ip->b;
+
+				/* Evalute A operand. */
+				ASSIGNADDR(aAddr, ip, ip->a);
+				DECMOD(aAddr->b);
+				ADDADDR(aAddr, aAddr->b);
+		
+				/* Evalute B operand. */
+				ASSIGNADDR(bAddr, ip, in_b);
+				DECMOD(bAddr->b);
+				ADDADDR(bAddr, bAddr->b);
+
+				if (aAddr->b < bAddr->b) {
+					/* Skip next instruction. */
+					IPINCMOD(ip);
+				}
+				IPINCMOD(ip);
+				PQUEUE_APPEND(ip);
+				break;
+			default:
+				/* This shouldn't happen. */
+				printf("Invalid instruction found. "\
+				       "You have a problem!\n");
+			}
+
+			pqinfo = pqinfo->next; /* Switch to next warrior. */
+		} while ((--cycle > 0) & (numalive > 1));
+
+		/* Accumulate results. */
+		for (i = 0; i < numwarriors; i++) {
+			if (pqinfos[i].numprocesses == 0) {
+				/* Warrior died this round. */
+				results[i*(numwarriors + 1) + numwarriors]++;
+			} else {
+				/* Warrior survived/won this round. */
+				results[i*(numwarriors + 1) + numalive - 1]++;
+			}
+		}
+	}
+	
+	/* Clean up. */
+	free(positions);
+	free(pqinfos);
+	free(pqueue);
+	
+	return results;
+}

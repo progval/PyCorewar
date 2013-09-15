@@ -1,0 +1,41 @@
+README for PyCorewar 0.2.0
+
+PyCorewar is a fast MARS with an easy to use Python interface. It is
+released under The GNU General Public License, Version 2 (see the file
+COPYING for details).
+
+At the moment the following features are supported:
+
+- ICWS '88 (with multiwarrior support)
+- ICWS '94 draft (without P-Space)
+- most features of pMARS' parser
+
+Updates can be found at http://corewars.jgutzeit.de/pycorewar/index.en.html
+For flames, comments and bug-reports send an email to jens@jgutzeit.de
+
+The '88-MARS of PyCorewar (Corewar.Benchmarking.MARS_88) is about
+125 % faster than pMARS, the '94nop-MARS (Corewar.Benchmarking.MARS_94nop)
+is about 50 % faster than pMARS. I hope to increase these values a little
+bit in further releases.
+
+Writing PyCorewar would have been almost impossible without the help of the
+Core War Community. Special thanks go to
+
+  Sascha Zapf for endlessly running benchmarks and testsuites and providing
+  lots of ideas.
+
+  Albert Ma, Nandor Sieben, Stefan Strack and Mintardjo Wangsaw for writing
+  pMARS
+
+  M Joonas Pihlaja for writing exhaust, which made it very easy to understand
+  the inner workings of a MARS
+
+  Martin Ankerl for writing exhaust-ma, where I have found a lot of ideas
+  for optimizing PyCorewar.
+
+  Michal Janeczek for writing fmars, where I have found even more ideas for
+  optimizing PyCorewar.
+
+  Paul V-Khoung for several nice chats about optimizing PyCorewar
+
+March 28, 2006 - Jens Gutzeit

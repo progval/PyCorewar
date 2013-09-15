@@ -1,0 +1,4 @@
+Eventually you will find in this directory some small examples for PyCorewar.
+The following examples are available:
+
+pymars - Simple command line interface to PyCorewar (similar to pMARS).

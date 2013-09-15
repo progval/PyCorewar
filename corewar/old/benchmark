@@ -1,0 +1,122 @@
+#!/usr/bin/python
+#
+# benchmark - Benchmark for PyCorewar
+#
+# ATTENTION! This is not a real benchmark. Its purpose is to make different
+# versions of PyCorewar comparable, but not to give an absolute measure for
+# the speed of the MARS.
+#
+# Copyright (C) 2006 Jens Gutzeit <jens@jgutzeit.de>
+#
+# This program is free software; you can redistribute it and/or modify
+# it under the terms of the GNU General Public License as published by
+# the Free Software Foundation; either version 2 of the License, or
+# (at your option) any later version.
+#
+# This program is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+# GNU General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
+
+import sys, time
+import Corewar, Corewar.Benchmarking
+
+# list of fights and expected results in this "benchmark"
+# format: warrior1, warrior2, seed,  number of executed instructions
+fights88 = [['88_test_IV.red', 'AIP.red', 125105, 95836828],
+            ['Agony_5.1.red', 'Cannonade.red', 24157, 49351017],
+            ['Chimera_v3.5.red', 'Cold_as_November_Rain.red', 1032961,
+             88355467],
+            ['Evoltmp_88.red', 'Fat_Expansion_V.red', 174419, 117298715],
+            ['Foggy_swamp.red', 'Freight_Train_v0.2.red', 653643, 51598259],
+            ['PacMan.red', 'Pixie_88.red', 626014, 87998489],
+            ['Positive_Knife_88.red', 'Quicksilver_88.red', 859885, 117182836],
+            ['Scan_the_Can.red', 'Simple_88.red', 613574, 59116443],
+            ['Simple_88_v0.2.red', 'Speeed_88mph.red', 962285, 61148867],
+            ['Tangle_Trap_3.red', 'The_Next_Step_88.red', 253213, 57638619],
+            ['The_Seed.red', 'Trident_squared_88.red', 934052, 131123563],
+            ['Vala.red', 'unhead-of_88.red', 42689, 115375666]
+           ]
+
+fights94nop = [['sonofvain.red', 'hfb.red', 43873, 120360073],
+               ['arrow.red', 'blacken.red', 171733, 42532907],
+               ['hazylazy.red', 'reepicheep.red', 10000, 58817919],
+               ['npaper2.red', 'uninvited.red', 2006, 114756881],
+               ['behemot.red', 'olivia.red', 752310, 62158489],
+               ['hullabaloo.red', 'spiritual.red', 983475, 93224721],
+               ['blowrag.red', 'willow.red', 73663, 78644869],
+               ['yorba.red', 'newt.red', 66666, 102851133],
+               ['crazyshot2.red', 'silking.red', 243853, 97086221],
+               ['candy2.red', 'impbullet1.red', 111133, 117489101],
+               ['fugitive.red', 'rosebud.red', 742983, 143340123],
+               ['benjrevenge.red', 'g2.red', 20299, 77754968]
+              ]
+
+if __name__ == '__main__':
+    benchMars_88 = Corewar.Benchmarking.MARS_88()
+    benchMars_94nop = Corewar.Benchmarking.MARS_94nop()
+    parser_88 = Corewar.Parser(standard=Corewar.STANDARD_88)
+    parser_94nop = Corewar.Parser(standard=Corewar.STANDARD_94_NOP)
+
+    print 'Bogus Benchmark for PyCorewar %s\n' % Corewar.version
+
+    print 'Corewar.Benchmarking.MARS_94nop'
+    print '===============================\n'
+    sum = 0.0
+    for fight in fights94nop:
+        w1_src = 'warriors/Koenigstuhl/94nop/' + fight[0]
+        w2_src = 'warriors/Koenigstuhl/94nop/' + fight[1]
+        seed = fight[2] 
+
+        # Parse the warriors.
+        w1 = parser_94nop.parse_file(w1_src)
+        w2 = parser_94nop.parse_file(w2_src)
+
+        # Run fights.
+        startTime = time.time()
+        benchMars_94nop.run((w1, w2), 1000, seed)
+        diffTime = time.time() - startTime
+        speed = fight[-1]/diffTime/1000000
+
+        tmp = '%s vs. %s' % (w1.name, w2.name)
+        while len(tmp) < 45:
+            tmp += ' '
+        print '%s: %8.3f MIPS' % (tmp, speed)
+
+        sum += speed
+
+    sum /= len(fights94nop)
+    print '\nAverage speed                                : %8.3f MIPS' % sum
+    print '\n'
+    sys.exit(1)  
+    print 'Corewar.Benchmarking.MARS_88'
+    print '============================\n'
+    sum = 0.0
+    for fight in fights88:
+        w1_src = 'warriors/88/simplified/' + fight[0]
+        w2_src = 'warriors/88/simplified/' + fight[1]
+        seed = fight[2] 
+
+        # Parse the warriors.
+        w1 = parser_88.parse_file(w1_src)
+        w2 = parser_88.parse_file(w2_src)
+
+        # Run fights.
+        startTime = time.time()
+        benchMars_88.run((w1, w2), 1000, seed)
+        diffTime = time.time() - startTime
+        speed = fight[-1]/diffTime/1000000
+
+        tmp = '%s vs. %s' % (w1.name, w2.name)
+        while len(tmp) < 45:
+            tmp += ' '
+        print '%s: %8.3f MIPS' % (tmp, speed)
+
+        sum += speed
+
+    sum /= len(fights88)
+    print '\nAverage speed                                : %8.3f MIPS' % sum

@@ -1,0 +1,11 @@
+Fri Feb 24, 2006  Jens Gutzeit <jens@jgutzeit.de>
+
+	* corewar/__init__.py (class Parser): Extended parser to support
+	FOR/ROF-loops and EQUs.
+
+	* corewar/__init__.py (class Warrior): Changed string representation
+	of warrior to resemble more pMARS'
+
+Sun Jan  1, 2006  Jens Gutzeit <jens@jgutzeit.de>
+
+	* Version 0.1.0 released.
