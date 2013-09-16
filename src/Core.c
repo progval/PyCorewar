@@ -216,12 +216,12 @@ static PyGetSetDef Core_getseters[] = {
 };
 
 static PySequenceMethods Core_as_sequence = {
-	(inquiry)Core_GetLength,     	/*sq_length*/
+	(lenfunc)Core_GetLength,     	/*sq_length*/
 	0,               		/*sq_concat*/
 	0,				/*sq_repeat*/
-	(intargfunc)Core_GetItem,	/*sq_item*/
+	(ssizeargfunc)Core_GetItem,	/*sq_item*/
 	0,				/*sq_slice*/
-	(intobjargproc)Core_SetItem,	/*sq_ass_item*/
+	(ssizeobjargproc)Core_SetItem,	/*sq_ass_item*/
 	0,				/*sq_ass_slice*/
 	0,				/*sq_contains*/
 	0,				/*sq_inplace_concat*/

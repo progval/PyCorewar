@@ -22,8 +22,8 @@
 
 u32_t rng(u32_t seed);
 u32_t calc_pos(u32_t *positions, u32_t numwarriors, u32_t coresize,
-	       u32_t mindistance, s32_t *seed);
+	       u32_t mindistance, u32_t *seed);
 void calc_pos_backup(u32_t *positions, u32_t numwarriors, u32_t coresize,
- 	             u32_t mindistance, s32_t *seed);
+ 	             u32_t mindistance, u32_t *seed);
 
 #endif /* BENCH_POSITIONING__H */

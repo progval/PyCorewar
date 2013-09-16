@@ -51,7 +51,7 @@ rng(u32_t seed)
  */
 u32_t
 calc_pos(u32_t *positions, u32_t numwarriors, u32_t coresize,
-	 u32_t mindistance, s32_t *seed)
+	 u32_t mindistance, u32_t *seed)
 {
 	u32_t pos = 1; /* Current warrior to find position for. */
 	u32_t i;
@@ -103,7 +103,7 @@ calc_pos(u32_t *positions, u32_t numwarriors, u32_t coresize,
 /* Backup warrior positioning algorithm. */
 void
 calc_pos_backup(u32_t *positions, u32_t numwarriors, u32_t coresize,
-	        u32_t mindistance, s32_t *seed)
+	        u32_t mindistance, u32_t *seed)
 {
 	u32_t i;
 	u32_t j;

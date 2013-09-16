@@ -215,12 +215,12 @@ static PyGetSetDef ProcessQueue_getseters[] = {
 };
 
 static PySequenceMethods ProcessQueue_as_sequence = {
-	(inquiry)ProcessQueue_GetLength,	/*sq_length*/
+	(lenfunc)ProcessQueue_GetLength,	/*sq_length*/
 	0,               			/*sq_concat*/
 	0,					/*sq_repeat*/
-	(intargfunc)ProcessQueue_GetItem,	/*sq_item*/
+	(ssizeargfunc)ProcessQueue_GetItem,	/*sq_item*/
 	0,					/*sq_slice*/
-	(intobjargproc)ProcessQueue_SetItem,	/*sq_ass_item*/
+	(ssizeobjargproc)ProcessQueue_SetItem,	/*sq_ass_item*/
 	0,					/*sq_ass_slice*/
 	0,					/*sq_contains*/
 	0,					/*sq_inplace_concat*/
