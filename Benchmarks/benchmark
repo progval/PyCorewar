@@ -1,4 +1,4 @@
-#!/usr/bin/python
+#!/usr/bin/env python
 #
 # benchmark - Benchmark for PyCorewar
 #
@@ -174,7 +174,7 @@ FIGHTS_94_NOP = [['firestorm.red', 'utterer.red', 383236,
                     [1811,  745, 2444],  472375676,
                     [3546, 1490, 4964],  951509557],
                  ['halcyon.red', 'rascal.red', 1900353,
-                    [  62,   37,    1],    4367697, 
+                    [  62,   37,    1],    4367697,
                     [ 540,  373,   87],   50617006,
                     [1372,  884,  244],  131105057,
                     [2753, 1728,  519],  265155786,
@@ -291,7 +291,7 @@ FIGHTS_94_NOP = [['firestorm.red', 'utterer.red', 383236,
                     [  20,   76,    4],   2258500,
                     [ 208,  746,   46],  22871138,
                     [ 530, 1846,  124],  59897177,
-                    [1029, 3719,  252], 118110499, 
+                    [1029, 3719,  252], 118110499,
                     [2043, 7421,  536], 240023324],
                  ['mischief.red', 'cracki.red', 1889400,
                     [  47,   49,    4],   6043874,
@@ -302,7 +302,7 @@ FIGHTS_94_NOP = [['firestorm.red', 'utterer.red', 383236,
                  ['omms.red', 'quicksilver.red', 1400849,
                     [  35,   55,   10],   4266466,
                     [ 353,  580,   67],  43736696,
-                    [ 871, 1475,  154], 106454296, 
+                    [ 871, 1475,  154], 106454296,
                     [1704, 2964,  332], 218288585,
                     [3433, 5908,  659], 442065010],
                  ['herbalavenger.red', 'geist.red', 392694,
@@ -474,7 +474,7 @@ def benchmark_pmars_94nop(rounds, path):
         l = int(results[2])
         t = rounds - w - l
         pmars_result = [w, l, t]
-        
+
         # Check result.
         if not pmars_result == result:
             print 'Got invalid result for %s vs. %s.' % (w1.name, w2.name)
@@ -560,7 +560,7 @@ def benchmark_exmars_94nop(rounds, path):
         t = int(results[1])
         l = rounds - w - t
         exmars_result = [w, l, t]
-        
+
         # Check result.
         if not exmars_result == result:
             print 'Got invalid result for %s vs. %s.' % (w1.name, w2.name)
@@ -646,7 +646,7 @@ def benchmark_exhaust_94nop(rounds, path):
         t = int(results[1])
         l = rounds - w - t
         exhaust_result = [w, l, t]
-        
+
         # Check result.
         if not exhaust_result == result:
             print 'Got invalid result for %s vs. %s.' % (w1.name, w2.name)
@@ -732,7 +732,7 @@ def benchmark_exhaust_ma_94nop(rounds, path):
         t = int(results[1])
         l = rounds - w - t
         exhaust_result = [w, l, t]
-        
+
         # Check result.
         if not exhaust_result == result:
             print 'Got invalid result for %s vs. %s.' % (w1.name, w2.name)
