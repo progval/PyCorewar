@@ -25,8 +25,6 @@ Classes:
   MARS88 - MARS according to the rules of ICWS '88
 """
 
-import sets
-
 from Corewar._Debugging import *
 from Corewar.Redcode import *
 
@@ -44,13 +42,13 @@ class MARS88(object):
         
         # plausibility checks
         if coresize < 1:
-            raise ValueError, "Coresize must be greater than zero."
+            raise ValueError("Coresize must be greater than zero.")
         if maxprocesses < 1:
-            raise ValueError, "Maximal number of processes must be "\
-                              "greater than zero."
+            raise ValueError("Maximal number of processes must be "\
+                              "greater than zero.")
         if maxcycles < 1:
-            raise ValueError, "Maximal number of cycles must be greater "\
-                              "than zero."
+            raise ValueError("Maximal number of cycles must be greater "\
+                              "than zero.")
 
         self.__maxprocesses = maxprocesses
         self.__maxcycles = maxcycles
@@ -69,17 +67,17 @@ class MARS88(object):
         self.__execInsn = ''
 
         # list of decremented core locations
-        self.__decLoc = sets.Set()
+        self.__decLoc = set()
 
         # list of incremented core location
         # ICWS'88 doesn't have any increment operators
         # self.__incLoc = []
 
         # list of core locations written to
-        self.__writeLoc = sets.Set()
+        self.__writeLoc = set()
 
         # list of compared or read core locations
-        self.__readLoc = sets.Set()
+        self.__readLoc = set()
 
     def load(self, warrior, location):
         """Load the warrior's code into the core with the given position
@@ -88,7 +86,7 @@ class MARS88(object):
         # FIXME: plausibility checks
 
         # copy warrior into core
-        for offset in xrange(0, warrior.length):
+        for offset in range(0, warrior.length):
             self.core[location+offset] = warrior.instructions[offset].copy()
 
         # create warrior's process queue
@@ -239,13 +237,13 @@ class MARS88(object):
         else:
             while self.cycle < self.maxcycles:
                 numAlive = 0
-                for warrior in xrange(0, self.numWarriors):
+                for warrior in range(0, self.numWarriors):
                     if len(self.pqueues[warrior]) > 0:
                         numAlive += 1
                 if numAlive <= 1:
                     break
 
-                for warrior in xrange(0, self.numWarriors):
+                for warrior in range(0, self.numWarriors):
                     if len(self.pqueues[warrior]) > 0:
                         self.warrior = warrior
                         self.step()

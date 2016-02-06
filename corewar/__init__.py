@@ -17,8 +17,8 @@
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
 import re
+import sys
 import types
-from sets import Set
 from Corewar.Redcode import *
 
 __doc__ = """Corewar
@@ -70,7 +70,7 @@ class Warrior(object):
         """
         
         if coresize < 1:
-            raise ValueError, 'Corsize must be greater than zero.'
+            raise ValueError('Corsize must be greater than zero.')
         self.coresize = coresize
         self.standard = standard
         self.instructions = []
@@ -198,31 +198,31 @@ class Parser(object):
         
         # Plausibility checks.
         if standard not in (STANDARD_88, STANDARD_94_NOP, STANDARD_94):
-            raise ValueError, "Unknown or unsupported standard."
+            raise ValueError("Unknown or unsupported standard.")
         if coresize < 1:
-            raise ValueError, "Invalid size of core."
+            raise ValueError("Invalid size of core.")
         if maxprocesses < 1:
-            raise ValueError, "Invalid maximal number of processes."
+            raise ValueError("Invalid maximal number of processes.")
         if maxcycles < 1:
-            raise ValueError, "Invalid maximal number of cycles before tie."
+            raise ValueError("Invalid maximal number of cycles before tie.")
         if mindistance < 1:
-            raise ValueError, "Invalid minimal distance between warriors."
+            raise ValueError("Invalid minimal distance between warriors.")
         if maxlength < 1:
-            raise ValueError, "Invalid maximal length of warrior."
+            raise ValueError("Invalid maximal length of warrior.")
         if rounds < 1:
-            raise ValueError, "Invalid number of rounds."
+            raise ValueError("Invalid number of rounds.")
         if warriors < 1:
-            raise ValueError, "Invalid number of warriors."
+            raise ValueError("Invalid number of warriors.")
         if standard == STANDARD_94:
             if pspacesize < 1:
-                raise ValueError, "Invalid size of p-space."
+                raise ValueError("Invalid size of p-space.")
         else:
             pspacesize = 0
         if mindistance < maxlength:
-            raise ValueError, "Minimal distance between warriors is lower "\
-                              "than maximal length of a warrior."
+            raise ValueError("Minimal distance between warriors is lower "\
+                              "than maximal length of a warrior.")
         if coresize < maxlength:
-            raise ValueError, "Warrior does not fit into core."
+            raise ValueError("Warrior does not fit into core.")
         
         # Set values.
         self.coresize = coresize
@@ -252,7 +252,10 @@ class Parser(object):
         """Parse warrior from file."""
 
         # FIXME: check max. length of file
-        f = open(fname, 'r')
+        if sys.version_info[0] >= 3:
+            f = open(fname, 'r', encoding='ISO-8859-1')
+        else:
+            f = open(fname, 'r')
         data = f.read()
         f.close()
 
@@ -326,7 +329,7 @@ class Parser(object):
             # Handle ORG and END.
             if opcode in ('org', 'end'):
                 if self.standard == STANDARD_88 and opcode == 'org':
-                    raise WarriorParseError, ('Pseudoopcode ORG not allowed '\
+                    raise WarriorParseError('Pseudoopcode ORG not allowed '\
                                               'under \'88 rules', lineNum)
                 if not afield == '':
                     start = self.__evaluate_expr(afield, lineNum, 0)
@@ -335,22 +338,22 @@ class Parser(object):
             # Handle PIN.
             if opcode == 'pin':
                 if self.standard == STANDARD_88:
-                    raise WarriorParseError, ('Pseudoopcode PIN not allowed '\
+                    raise WarriorParseError('Pseudoopcode PIN not allowed '\
                                               'under \'88 rules', lineNum)
                 elif self.standard == STANDARD_94_NOP:
-                    raise WarriorParseError, ('Pseudoopcode PIN not allowed '\
+                    raise WarriorParseError('Pseudoopcode PIN not allowed '\
                                               'under \'94nop rules', lineNum)
                 try:
                     pin = int(afield)
                 except:
-                    raise WarriorParserError, ('Invalid PIN', lineNum)
+                    raise WarriorParserError('Invalid PIN', lineNum)
                 warrior.pin = pin
                 continue
             # Check cases, where B-field can be empty and fill it default
             # values. Handle empty B-field for DAT as well.
             if bfield == '':
                 if opcode not in ('dat', 'jmp', 'spl', 'nop'):
-                    raise WarriorParseError, ('Missing B-field', lineNum)
+                    raise WarriorParseError('Missing B-field', lineNum)
                 bfield = '0'
                 if opcode == 'dat':
                     bfield = afield
@@ -362,8 +365,8 @@ class Parser(object):
             try:
                 afield = self.__evaluate_expr(afield, lineNum, offset)
                 bfield = self.__evaluate_expr(bfield, lineNum, offset)
-            except EvalError, e:
-                raise WarriorParseError, (str(e), lineNum)
+            except EvalError as e:
+                raise WarriorParseError(str(e), lineNum)
 
             # Check adherence to specified standard and fill in default
             # opcode modifiers, if they aren't specified.
@@ -373,7 +376,7 @@ class Parser(object):
             elif self.standard in (STANDARD_94_NOP, STANDARD_94):
                 if self.standard == STANDARD_94_NOP and \
                    opcode in ('stp', 'ldp'):
-                    raise WarriorParseError, ('Opcodes STP and LDP are not '\
+                    raise WarriorParseError('Opcodes STP and LDP are not '\
                                               'allowed under \'94nop rules',
                                               lineNum)
 
@@ -403,13 +406,13 @@ class Parser(object):
                     elif opcode in ('jmp', 'jmz', 'jmn', 'djn', 'spl'):
                         modifier = 'b'
                     else:
-                        raise WarriorParseError, ('Parser bug found.', lineNum)
+                        raise WarriorParseError('Parser bug found.', lineNum)
 
                 # Create instruction.
                 insn = Instruction(self.coresize)
                 insn.modifier = self.__MODIFIERS[modifier]
             else:
-                raise WarriorParseError, ('Parser bug found!', lineNum)
+                raise WarriorParseError('Parser bug found!', lineNum)
 
             # Set remaining values of instruction.
             insn.opcode = self.__OPCODES[opcode]
@@ -430,7 +433,7 @@ class Parser(object):
         # Check length of warrior.
         if len(warrior.instructions) > self.maxlength:
             diff = len(warrior.instructions) - self.maxlength
-            raise WarriorParseError, ('Too many instructions (about %d '\
+            raise WarriorParseError('Too many instructions (about %d '\
                                       'more)' % diff, lineNum)
 
         # Check for unusual start positions.
@@ -491,7 +494,7 @@ class Parser(object):
             pass0.append([lineNum, line.strip()])
 
         if not redcodeFound:
-            raise WarriorParseError, ('No ;redcode found in warrior', lineNum)
+            raise WarriorParseError('No ;redcode found in warrior', lineNum)
 
         return pass0
 
@@ -528,7 +531,7 @@ class Parser(object):
         elif pseudoopcode == 'for':
             # Plausibility check.
             if pos == len(line):
-                raise WarriorParseError, ('Incomplete loop head.', lineNum)
+                raise WarriorParseError('Incomplete loop head.', lineNum)
 
             # Get loop variable.
             if len(self.__tmpLabels) > 0:
@@ -557,7 +560,7 @@ class Parser(object):
                     if line[:3].lower() == 'rof':
                         break
                 if not line[:3].lower() == 'rof':
-                    raise WarriorParseError, ('Missing ROF for loop', lineNum)
+                    raise WarriorParseError('Missing ROF for loop', lineNum)
                 return False
 
             # Save information about loop.
@@ -565,7 +568,7 @@ class Parser(object):
             loopStart = self.__pass0_line
 
             endFound = False
-            for loopRound in xrange(i):
+            for loopRound in range(i):
                 self.__loopVars.append((loopVar, loopRound + 1))
 
                 self.__pass0_line = loopStart
@@ -574,7 +577,7 @@ class Parser(object):
                 while len(self.__loopVars) == thisLoopLevel and not endFound:
                     self.__pass0_line += 1
                     if self.__pass0_line >= len(self.__pass0):
-                        raise WarriorParseError, ('Missing ROF for loop',
+                        raise WarriorParseError('Missing ROF for loop',
                                                   lineNum)
                     endFound = self.__run_pass1()
             return endFound
@@ -583,7 +586,7 @@ class Parser(object):
 
             # Check, if we are inside loop.
             if len(self.__loopVars) == 0:
-                raise WarriorParseError, ('Missing FOR for this loop', lineNum)
+                raise WarriorParseError('Missing FOR for this loop', lineNum)
 
             self.__loopVars.pop()
             self.__loopLevel -= 1 
@@ -627,7 +630,7 @@ class Parser(object):
             if char.isspace():
                 continue
             if not char in validChars:
-                raise WarriorParseError, ('Invalid character \'%s\'' % char,
+                raise WarriorParseError('Invalid character \'%s\'' % char,
                                           lineNum)
             expr += char
         
@@ -723,11 +726,11 @@ class Parser(object):
                 break # Seems, that we have found opcode.
 
             # Check, whether label has already been found.
-            if label in self.__tmpLabels or self.__labels.has_key(label):
+            if label in self.__tmpLabels or label in self.__labels:
                 self.warnings.append('Warnining in line %d: Redefinition of '\
                                      'label \'%s\'' % (lineNum, label))
-            elif self.__equs.has_key(label):
-                raise WarriorParseError, ('Redefinition of \'%s\'' % label,
+            elif label in self.__equs:
+                raise WarriorParseError('Redefinition of \'%s\'' % label,
                                           lineNum)
             else:
                 # Append label to list of temporary labels.
@@ -751,11 +754,11 @@ class Parser(object):
         try:
             result = self.__evaluate_expr(expr, lineNum) % self.coresize
         except:
-            raise WarriorParseError, ('Bad expression for assertion', lineNum)
+            raise WarriorParseError('Bad expression for assertion', lineNum)
 
         self.__foundAssert = True
         if not result == 1:
-            raise WarriorParseError, ('Assertion \'%s\' failed' % expr,
+            raise WarriorParseError('Assertion \'%s\' failed' % expr,
                                       lineNum)
 
     def __run_pass1_equ(self, line, pos, lineNum):
@@ -763,14 +766,14 @@ class Parser(object):
 
         # Check, if at least one label has been found for this EQU.
         if self.__tmpLabels == []:
-            raise WarriorParseError, ('Missing name for EQU', lineNum)
+            raise WarriorParseError('Missing name for EQU', lineNum)
 
         pos += 3
         if pos == len(line):
-            raise WarriorParseError, ('Missing EQU expression', lineNum)
+            raise WarriorParseError('Missing EQU expression', lineNum)
         if not line[pos].isspace():
             # This should never happen.
-            raise WarriorParseError, ('Parser bug found!', lineNum)
+            raise WarriorParseError('Parser bug found!', lineNum)
                 
         # Get expression.
         equExpr = ''
@@ -778,17 +781,17 @@ class Parser(object):
             char = line[pos]
             pos += 1
             if not char in self.__EQU_CHARS:
-                raise WarriorParseError, ('Invalid character \'%s\'' % char,
+                raise WarriorParseError('Invalid character \'%s\'' % char,
                                           lineNum)
             equExpr += char
 
         # Save all temporary labels as EQU.
         for label in self.__tmpLabels:
-            if self.__equs.has_key(label) or self.__labels.has_key(label):
-                raise WarriorParseError, ('Redefinition of \'%s\'' % label,
+            if label in self.__equs or label in self.__labels:
+                raise WarriorParseError('Redefinition of \'%s\'' % label,
                                           lineNum)
             self.__equs[label] = equExpr
-            self.__equ_deps[label] = {'deps': Set(), 'ready': False,
+            self.__equ_deps[label] = {'deps': set(), 'ready': False,
                                       'line': lineNum}
         self.__tmpLabels = []
 
@@ -798,7 +801,7 @@ class Parser(object):
         self.__save_labels()
         pin = line[3:].strip()
         if not pin:
-            raise WarriorParseException, ('Missing PIN', lineNum)
+            raise WarriorParseException('Missing PIN', lineNum)
         self.__pass1.append((lineNum, 'pin', '', '', pin, '', ''))
 
     def __run_pass1_insn(self, line, pos, lineNum):
@@ -807,7 +810,7 @@ class Parser(object):
         # Handle opcode(.modifier)
         m = self.__INSN_RX.match(line, pos)
         if not m:
-            raise WarriorParseError, ('Missing or invalid opcode', lineNum)
+            raise WarriorParseError('Missing or invalid opcode', lineNum)
         opcode = m.group('opcode').lower()
         modifier = m.group('modifier')
         if not modifier:
@@ -816,7 +819,7 @@ class Parser(object):
         pos = m.end()
 
         if pos == len(line):
-            raise WarriorParseError, ('Incomplete instruction', lineNum)
+            raise WarriorParseError('Incomplete instruction', lineNum)
 
         # Handle possible A-mode.
         amode = line[pos]
@@ -826,7 +829,7 @@ class Parser(object):
             amode = '$'
 
         if pos == len(line):
-            raise WarriorParseError, ('Incomplete instruction', lineNum)
+            raise WarriorParseError('Incomplete instruction', lineNum)
 
         # Handle A-field.
         afield = ''
@@ -839,12 +842,12 @@ class Parser(object):
             if char.isspace():
                 continue
             if not char in self.__EXPR_CHARS: 
-                raise WarriorParseError, ('Invalid character \'%s\'' % char,
+                raise WarriorParseError('Invalid character \'%s\'' % char,
                                           lineNum)
             afield += char
 
         if pos == len(line) and line[-1] == ',':
-            raise WarriorParseError, ('Missing B-operand', lineNum)
+            raise WarriorParseError('Missing B-operand', lineNum)
 
         # Skip possible whitespaces.
         while pos < len(line):
@@ -877,27 +880,27 @@ class Parser(object):
             raise WarriorParseError ('Opcode %s not allowed under '\
                                      '\'88 rules' % opcode.upper(), lineNum)
         if modifier:
-            raise WarriorParseError, ('Instruction modifiers are not '\
+            raise WarriorParseError('Instruction modifiers are not '\
                                       'allowed under \'88 rules', lineNum)
         if opcode == 'dat':
             if amode not in '#<' or bmode not in '#<':
-                raise WarriorParseError, ('Invalid instruction under '\
+                raise WarriorParseError('Invalid instruction under '\
                                           '\'88 rules. Proper format:'\
                                           ' DAT [#<], [#<]', lineNum)
         elif opcode in ('mov', 'add', 'sub', 'cmp', 'slt'):
             if amode not in '#$@<' or bmode not in '$@<':
-                raise WarriorParseError, ('Invalid instruction under '\
+                raise WarriorParseError('Invalid instruction under '\
                                           '\'88 rules. Proper format:'\
                                           ' %s [#$@<], [$@<]' % opcode.upper(),
                                           lineNum)
         elif opcode in ('jmp', 'jmz', 'jmn', 'djn', 'spl'):
             if amode not in '$@<' or bmode not in '#$@<':
-                raise WarriorParseError, ('Invalid instruction under '\
+                raise WarriorParseError('Invalid instruction under '\
                                           '\'88 rules. Proper format:'\
                                           ' %s [$@<], [#$@<]' % opcode.upper(),
                                           lineNum)
         else:
-            raise WarriorParseError, ('Parser bug found.', lineNum)
+            raise WarriorParseError('Parser bug found.', lineNum)
 
     def __expand_EQU(self, label):
         """Expand the given EQU and recurse into other EQU definitions
@@ -922,10 +925,10 @@ class Parser(object):
                 else:
                     break
             var = expr[startPos:pos]
-            if self.__labels.has_key(var):
+            if var in self.__labels:
                 # Do nothing, if it is a simple label.
                 continue
-            elif self.__equs.has_key(var):
+            elif var in self.__equs:
                 # Append new label (and its dependencies) to dependencies.
                 self.__equ_deps[label]['deps'].add(var)
                 self.__equ_deps[label]['deps'] |= self.__equ_deps[var]['deps']
@@ -934,7 +937,7 @@ class Parser(object):
                 # ATTENTION! Run recursion check before we recurse or it
                 # will NOT work.
                 if label in self.__equ_deps[label]['deps']:
-                    raise WarriorParseError, ('Label \'%s\' is recursively '\
+                    raise WarriorParseError('Label \'%s\' is recursively '\
                                               'defined' % label,
                                               self.__equ_deps[label]['line'])
 
@@ -972,15 +975,15 @@ class Parser(object):
                     break
             var = expr[startPos:pos]
 
-            if self.__labels.has_key(var):
+            if var in self.__labels:
                 labelExpr = str(self.__labels[var] + offset)
                 expr = expr[:startPos] + labelExpr + expr[pos:]
                 pos = startPos + len(labelExpr)
-            elif self.__predefinedLabels.has_key(var):
+            elif var in self.__predefinedLabels:
                 labelExpr = str(self.__predefinedLabels[var])
                 expr = expr[:startPos] + labelExpr + expr[pos:]
                 pos = startPos + len(labelExpr)
-            elif self.__equs.has_key(var):
+            elif var in self.__equs:
                 self.__expand_EQU(var)
                 labelExpr = self.__equs[var]
                 expr = expr[:startPos] + labelExpr + expr[pos:]
@@ -988,7 +991,7 @@ class Parser(object):
             elif var in 'abcdefghijklmnopqrstuvwxyz':
                 pass
             else:
-                raise WarriorParseError, ('Label \'%s\' is unknown' % var,
+                raise WarriorParseError('Label \'%s\' is unknown' % var,
                                           lineNum)
 
         val = self.calc.eval(expr) % self.coresize
@@ -1024,7 +1027,7 @@ class Calculator(object):
         
         tokens = self.__tokenize(expression)
         if len(tokens) == 0:
-            raise EvalError, 'Cannot evaluate empty expression.'
+            raise EvalError('Cannot evaluate empty expression.')
 
         # FIXME: Check first token.
         # FIXME: Check last token.
@@ -1040,15 +1043,15 @@ class Calculator(object):
             elif token == ')':
                 num_parentheses -= 1
         if num_parentheses < 0:
-            raise EvalError, 'Missing opening parenthesis.'
+            raise EvalError('Missing opening parenthesis.')
         elif num_parentheses > 0:
-            raise EvalError, 'Missing closing parenthesis.'
+            raise EvalError('Missing closing parenthesis.')
 
         while len(tokens) > 1:
             # Find first deepest nested pair of parentheses.
             pos1 = 0
             pos2 = len(tokens) - 1
-            for pos in xrange(len(tokens)):
+            for pos in range(len(tokens)):
                 if tokens[pos] == '(':
                     pos1 = pos
                 elif tokens[pos] == ')':
@@ -1060,7 +1063,7 @@ class Calculator(object):
                 # Find operator with highest precedence.
                 op_pos = pos2
                 op_prec = -1
-                for pos in xrange(pos1 + 1, pos2):
+                for pos in range(pos1 + 1, pos2):
                     if self.__is_op(tokens[pos]):
                         # Check if it is unary operator.
                         if tokens[pos-1] == '(' or self.__is_op(tokens[pos-1]):
@@ -1100,7 +1103,7 @@ class Calculator(object):
                         if val1 in 'abcdefghijklmnopqrstuvwyxz':
                             self.registers[val1] = val2
                         else:
-                            raise EvalError, 'Bad expression.'
+                            raise EvalError('Bad expression.')
                         result = val2
                     val1 = self.__get_value(val1)
 
@@ -1113,7 +1116,7 @@ class Calculator(object):
                         result = val1 * val2
                     elif op == '/':
                         # pMARS: -1/2 = 0, Python: -1/2 = -1!
-                        result = abs(val1) / val2
+                        result = abs(val1) // val2
                         if val1 < 0:
                             result *= -1
                     elif op == '%':
@@ -1169,20 +1172,20 @@ class Calculator(object):
                 tokens[pos1+1] = self.__get_value(tokens[pos1+1])
                 tokens = tokens[:pos1] + [tokens[pos1+1],] + tokens[pos2+1:]
 
-        if type(tokens[0]) is types.IntType:
+        if type(tokens[0]) is int:
             return tokens[0]
         else:
-            raise EvalError, 'Bad expression.'
+            raise EvalError('Bad expression.')
 
     def __get_value(self, item):
         """Return value of item (internal register or integer)."""
 
-        if type(item) == types.IntType:
+        if type(item) == int:
             return item
         elif item in 'abcdefghijklmnopqrstuvwxyz':
             return self.registers[item]
         else:
-            raise EvalError, 'Bad expression.'
+            raise EvalError('Bad expression.')
 
     def __is_op(self, x):
         """Return True, if the token x is an operator."""
@@ -1259,20 +1262,20 @@ class Calculator(object):
                         tokens.append('&&')
                         pos += 2
                     else:
-                        raise EvalError, 'Unknown operator at position %d'\
-                                         % pos
+                        raise EvalError('Unknown operator at position %d'\
+                                         % pos)
                 else:
-                    raise EvalError, 'Unknown operator at position %d' % pos
+                    raise EvalError('Unknown operator at position %d' % pos)
             elif c == '|':
                 if pos+1 < len(expr):
                     if expr[pos+1] == '|':
                         tokens.append('||')
                         pos += 2
                     else:
-                        raise EvalError, 'Unknown operator at position %d'\
-                                         % pos
+                        raise EvalError('Unknown operator at position %d'\
+                                         % pos)
                 else:
-                    raise EvalError, 'Unknown operator at position %d' % pos
+                    raise EvalError('Unknown operator at position %d' % pos)
             elif c.isspace():
                 # Ignore whitespaces.
                 pos += 1
@@ -1281,6 +1284,6 @@ class Calculator(object):
                 tokens.append(c)
                 pos += 1
             else:
-                raise EvalError, 'Unknown character at position %d.' % pos
+                raise EvalError('Unknown character at position %d.' % pos)
 
         return tokens

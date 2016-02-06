@@ -139,7 +139,7 @@ Core_dealloc(Core *self)
 	}
 	
 	free(self->core);
-	self->ob_type->tp_free((PyObject*) self);
+	Py_TYPE(self)->tp_free((PyObject*) self);
 }
 
 static PyObject *
@@ -229,7 +229,7 @@ static PySequenceMethods Core_as_sequence = {
 };
 
 PyTypeObject CoreType = {
-	PyObject_HEAD_INIT(NULL) 0, 			/*ob_size*/
+	PyVarObject_HEAD_INIT(NULL, 0) 			/*ob_size*/
 	"Core.Debugging.Core",				/*tp_name*/
 	sizeof(Core),			 	  	/*tp_basicsize*/
 	0,                         			/*tp_itemsize*/

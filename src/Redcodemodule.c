@@ -22,6 +22,12 @@
 #include <MyTypes.h>
 #include <Instruction.h>
 
+#if PY_MAJOR_VERSION >= 3
+    #define py3long_or_py2int_from_long PyLong_FromLong
+#else
+    #define py3long_or_py2int_from_long PyInt_FromLong
+#endif
+
 /*
  * ATTENTION! Be sure to use the same order as in Instruction.h.
  */
@@ -95,7 +101,7 @@ Instruction88_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 static void 
 Instruction88_dealloc(Instruction88 *self)
 {
-	self->ob_type->tp_free((PyObject*) self);
+	Py_TYPE(self)->tp_free((PyObject*) self);
 }
 
 PyDoc_STRVAR(opcode88__doc__,
@@ -104,7 +110,11 @@ PyDoc_STRVAR(opcode88__doc__,
 static PyObject *
 Instruction88_GetOpcode(Instruction88 *self, void *closure)
 {
-	PyObject *opcode = PyInt_FromLong(OPCODE88(self->insn.insn));
+#if PY_MAJOR_VERSION >= 3
+	PyObject *opcode = PyLong_FromLong(OPCODE88(self->insn.insn));
+#else
+	PyObject *opcode = py3long_or_py2int_from_long(OPCODE88(self->insn.insn));
+#endif
 
 	if (opcode == NULL) {
 		return NULL;
@@ -120,7 +130,11 @@ Instruction88_SetOpcode(Instruction88 *self, PyObject *value, void *closure)
 	s32_t opcode;
 
 	/* plausibility checks */
+#if PY_MAJOR_VERSION >= 3
+	if (!PyLong_Check(value)) {
+#else
 	if (!PyInt_Check(value)) {
+#endif
 		PyErr_SetString(PyExc_TypeError, "Invalid opcode");
 		return -1;
 	}
@@ -146,7 +160,11 @@ PyDoc_STRVAR(amode88__doc__,
 static PyObject *
 Instruction88_GetAMode(Instruction88 *self, void *closure)
 {
-	PyObject *amode = PyInt_FromLong(AMODE88(self->insn.insn));
+#if PY_MAJOR_VERSION >= 3
+	PyObject *amode = PyLong_FromLong(AMODE88(self->insn.insn));
+#else
+	PyObject *amode = py3long_or_py2int_from_long(AMODE88(self->insn.insn));
+#endif
 
 	if (amode == NULL) {
 		return NULL;
@@ -162,7 +180,11 @@ Instruction88_SetAMode(Instruction88 *self, PyObject *value, void *closure)
 	s32_t amode;
 
 	/* plausibility checks */
+#if PY_MAJOR_VERSION >= 3
+	if (!PyLong_Check(value)) {
+#else
 	if (!PyInt_Check(value)) {
+#endif
 		PyErr_SetString(PyExc_TypeError, "Invalid A-mode");
 		return -1;
 	}
@@ -188,7 +210,11 @@ PyDoc_STRVAR(bmode88__doc__,
 static PyObject *
 Instruction88_GetBMode(Instruction88 *self, void *closure)
 {
-	PyObject *bmode = PyInt_FromLong(BMODE88(self->insn.insn));
+#if PY_MAJOR_VERSION >= 3
+	PyObject *bmode = PyLong_FromLong(BMODE88(self->insn.insn));
+#else
+	PyObject *bmode = py3long_or_py2int_from_long(BMODE88(self->insn.insn));
+#endif
 
 	if (bmode == NULL) {
 		return NULL;
@@ -204,7 +230,11 @@ Instruction88_SetBMode(Instruction88 *self, PyObject *value, void *closure)
 	s32_t bmode;
 
 	/* plausibility checks */
+#if PY_MAJOR_VERSION >= 3
+	if (!PyLong_Check(value)) {
+#else
 	if (!PyInt_Check(value)) {
+#endif
 		PyErr_SetString(PyExc_TypeError, "Invalid B-mode");
 		return -1;
 	}
@@ -231,7 +261,11 @@ PyDoc_STRVAR(afield88__doc__,
 static PyObject *
 Instruction88_GetAField(Instruction88 *self, void *closure)
 {
-	PyObject *afield = PyInt_FromLong(self->insn.a);
+#if PY_MAJOR_VERSION >= 3
+	PyObject *afield = PyLong_FromLong(self->insn.a);
+#else
+	PyObject *afield = py3long_or_py2int_from_long(self->insn.a);
+#endif
 
 	if (afield == NULL) {
 		return NULL;
@@ -247,12 +281,20 @@ Instruction88_SetAField(Instruction88 *self, PyObject *value, void *closure)
 	s32_t tmp;
 
 	/* plausibility checks */
+#if PY_MAJOR_VERSION >= 3
+	if (!PyLong_Check(value)) {
+#else
 	if (!PyInt_Check(value)) {
+#endif
 		PyErr_SetString(PyExc_TypeError, "A-field must be an integer");
 		return -1;
 	}
 
+#if PY_MAJOR_VERSION >= 3
+	tmp = PyLong_AsLong(value);
+#else
 	tmp = PyInt_AsLong(value);
+#endif
 	if (tmp < 0) {
 		tmp = self->coresize - (abs(tmp) % self->coresize);
 	}
@@ -268,7 +310,11 @@ PyDoc_STRVAR(bfield88__doc__,
 static PyObject *
 Instruction88_GetBField(Instruction88 *self, void *closure)
 {
-	PyObject *bfield = PyInt_FromLong(self->insn.b);
+#if PY_MAJOR_VERSION >= 3
+	PyObject *bfield = PyLong_FromLong(self->insn.b);
+#else
+	PyObject *bfield = py3long_or_py2int_from_long(self->insn.b);
+#endif
 
 	if (bfield == NULL) {
 		return NULL;
@@ -284,12 +330,20 @@ Instruction88_SetBField(Instruction88 *self, PyObject *value, void *closure)
 	s32_t tmp;
 
 	/* plausibility checks */
+#if PY_MAJOR_VERSION >= 3
+	if (!PyLong_Check(value)) {
+#else
 	if (!PyInt_Check(value)) {
+#endif
 		PyErr_SetString(PyExc_TypeError, "B-field must be an integer");
 		return -1;
 	}
 
+#if PY_MAJOR_VERSION >= 3
+	tmp = PyLong_AsLong(value);
+#else
 	tmp = PyInt_AsLong(value);
+#endif
 	if (tmp < 0) {
 		tmp = self->coresize - (abs(tmp) % self->coresize);
 	}
@@ -357,7 +411,11 @@ Instruction88_repr(Instruction88 *self)
 	}
 
 	/* build result */
+#if PY_MAJOR_VERSION >= 3
+	result = PyUnicode_FromString(buffer);
+#else
 	result = PyString_FromString(buffer);
+#endif
 
 	return result;
 }
@@ -426,7 +484,7 @@ static PyGetSetDef Instruction88_getseters[] = {
 };
 
 static PyTypeObject Instruction88Type = {
-	PyObject_HEAD_INIT(NULL) 0, 			/*ob_size*/
+	PyVarObject_HEAD_INIT(NULL, 0) 			/*ob_size*/
 	"Redcode.Instruction88",			/*tp_name*/
 	sizeof(Instruction88),		 	  	/*tp_basicsize*/
 	0,                         			/*tp_itemsize*/
@@ -512,7 +570,7 @@ Instruction_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 static void 
 Instruction_dealloc(Instruction *self)
 {
-	self->ob_type->tp_free((PyObject*) self);
+	Py_TYPE(self)->tp_free((PyObject*) self);
 }
 
 PyDoc_STRVAR(opcode__doc__,
@@ -521,7 +579,7 @@ PyDoc_STRVAR(opcode__doc__,
 static PyObject *
 Instruction_GetOpcode(Instruction *self, void *closure)
 {
-	PyObject *opcode = PyInt_FromLong(OPCODE(self->insn.insn));
+	PyObject *opcode = py3long_or_py2int_from_long(OPCODE(self->insn.insn));
 
 	if (opcode == NULL) {
 		return NULL;
@@ -537,7 +595,11 @@ Instruction_SetOpcode(Instruction *self, PyObject *value, void *closure)
 	s32_t opcode;
 
 	/* plausibility checks */
+#if PY_MAJOR_VERSION >= 3
+	if (!PyLong_Check(value)) {
+#else
 	if (!PyInt_Check(value)) {
+#endif
 		PyErr_SetString(PyExc_TypeError, "Invalid opcode");
 		return -1;
 	}
@@ -563,7 +625,7 @@ PyDoc_STRVAR(modifier__doc__,
 static PyObject *
 Instruction_GetModifier(Instruction *self, void *closure)
 {
-	PyObject *modifier = PyInt_FromLong(MODIFIER(self->insn.insn));
+	PyObject *modifier = py3long_or_py2int_from_long(MODIFIER(self->insn.insn));
 
 	if (modifier == NULL) {
 		return NULL;
@@ -579,7 +641,11 @@ Instruction_SetModifier(Instruction *self, PyObject *value, void *closure)
 	s32_t modifier;
 
 	/* plausibility checks */
+#if PY_MAJOR_VERSION >= 3
+	if (!PyLong_Check(value)) {
+#else
 	if (!PyInt_Check(value)) {
+#endif
 		PyErr_SetString(PyExc_TypeError, "Invalid modifier");
 		return -1;
 	}
@@ -605,7 +671,7 @@ PyDoc_STRVAR(amode__doc__,
 static PyObject *
 Instruction_GetAMode(Instruction88 *self, void *closure)
 {
-	PyObject *amode = PyInt_FromLong(AMODE(self->insn.insn));
+	PyObject *amode = py3long_or_py2int_from_long(AMODE(self->insn.insn));
 
 	if (amode == NULL) {
 		return NULL;
@@ -621,7 +687,11 @@ Instruction_SetAMode(Instruction *self, PyObject *value, void *closure)
 	s32_t amode;
 
 	/* plausibility checks */
+#if PY_MAJOR_VERSION >= 3
+	if (!PyLong_Check(value)) {
+#else
 	if (!PyInt_Check(value)) {
+#endif
 		PyErr_SetString(PyExc_TypeError, "Invalid A-mode");
 		return -1;
 	}
@@ -647,7 +717,7 @@ PyDoc_STRVAR(bmode__doc__,
 static PyObject *
 Instruction_GetBMode(Instruction *self, void *closure)
 {
-	PyObject *bmode = PyInt_FromLong(BMODE(self->insn.insn));
+	PyObject *bmode = py3long_or_py2int_from_long(BMODE(self->insn.insn));
 
 	if (bmode == NULL) {
 		return NULL;
@@ -663,7 +733,11 @@ Instruction_SetBMode(Instruction *self, PyObject *value, void *closure)
 	s32_t bmode;
 
 	/* plausibility checks */
+#if PY_MAJOR_VERSION >= 3
+	if (!PyLong_Check(value)) {
+#else
 	if (!PyInt_Check(value)) {
+#endif
 		PyErr_SetString(PyExc_TypeError, "Invalid B-mode");
 		return -1;
 	}
@@ -690,7 +764,7 @@ PyDoc_STRVAR(afield__doc__,
 static PyObject *
 Instruction_GetAField(Instruction *self, void *closure)
 {
-	PyObject *afield = PyInt_FromLong(self->insn.a);
+	PyObject *afield = py3long_or_py2int_from_long(self->insn.a);
 
 	if (afield == NULL) {
 		return NULL;
@@ -706,12 +780,20 @@ Instruction_SetAField(Instruction *self, PyObject *value, void *closure)
 	s32_t tmp;
 
 	/* plausibility checks */
+#if PY_MAJOR_VERSION >= 3
+	if (!PyLong_Check(value)) {
+#else
 	if (!PyInt_Check(value)) {
+#endif
 		PyErr_SetString(PyExc_TypeError, "A-field must be an integer");
 		return -1;
 	}
 
+#if PY_MAJOR_VERSION >= 3
+	tmp = PyLong_AsLong(value);
+#else
 	tmp = PyInt_AsLong(value);
+#endif
 	if (tmp < 0) {
 		tmp = self->coresize - (abs(tmp) % self->coresize);
 	}
@@ -727,7 +809,7 @@ PyDoc_STRVAR(bfield__doc__,
 static PyObject *
 Instruction_GetBField(Instruction *self, void *closure)
 {
-	PyObject *bfield = PyInt_FromLong(self->insn.b);
+	PyObject *bfield = py3long_or_py2int_from_long(self->insn.b);
 
 	if (bfield == NULL) {
 		return NULL;
@@ -743,12 +825,20 @@ Instruction_SetBField(Instruction *self, PyObject *value, void *closure)
 	s32_t tmp;
 
 	/* plausibility checks */
+#if PY_MAJOR_VERSION >= 3
+	if (!PyLong_Check(value)) {
+#else
 	if (!PyInt_Check(value)) {
+#endif
 		PyErr_SetString(PyExc_TypeError, "B-field must be an integer");
 		return -1;
 	}
 
+#if PY_MAJOR_VERSION >= 3
+	tmp = PyLong_AsLong(value);
+#else
 	tmp = PyInt_AsLong(value);
+#endif
 	if (tmp < 0) {
 		tmp = self->coresize - (abs(tmp) % self->coresize);
 	}
@@ -818,7 +908,11 @@ Instruction_repr(Instruction *self)
 	}
 
 	/* build result */
+#if PY_MAJOR_VERSION >= 3
+	result = PyUnicode_FromString(buffer);
+#else
 	result = PyString_FromString(buffer);
+#endif
 
 	return result;
 }
@@ -889,7 +983,7 @@ static PyGetSetDef Instruction_getseters[] = {
 };
 
 static PyTypeObject InstructionType = {
-	PyObject_HEAD_INIT(NULL) 0, 			/*ob_size*/
+	PyVarObject_HEAD_INIT(NULL, 0) 			/*ob_size*/
 	"Redcode.Instruction",	 			/*tp_name*/
 	sizeof(Instruction),		 	  	/*tp_basicsize*/
 	0,                         			/*tp_itemsize*/
@@ -953,24 +1047,50 @@ PyDoc_STRVAR(module__doc__,
 "  MODE_A_INDIRECT, MODE_A_PREDECREMENT, MODE_A_POSTINCREMENT\n"\
 "   -- addressing modes");
 
+#if PY_MAJOR_VERSION >= 3
+static struct PyModuleDef module_def = {
+    PyModuleDef_HEAD_INIT,
+    "Redcode",     /* m_name */
+    module__doc__,  /* m_doc */
+    -1,                  /* m_size */
+    module_methods,    /* m_methods */
+    NULL,                /* m_reload */
+    NULL,                /* m_traverse */
+    NULL,                /* m_clear */
+    NULL,                /* m_free */
+};
+#endif
+
 PyMODINIT_FUNC
+#if PY_MAJOR_VERSION >= 3
+PyInit_Redcode(void)
+#else
 initRedcode(void)
+#endif
 {
 	PyObject *m;
 	PyObject *d;
 
-	if (PyType_Ready(&Instruction88Type) < 0) {
-		return;
-	}
-	if (PyType_Ready(&InstructionType) < 0) {
-		return;
+	if (PyType_Ready(&Instruction88Type) < 0 || PyType_Ready(&InstructionType) < 0) {
+#if PY_MAJOR_VERSION >= 3
+		return NULL;
+#else
+        return;
+#endif
 	}
 
 	/* Initialize module. */	
+#if PY_MAJOR_VERSION >= 3
+    m = PyModule_Create(&module_def);
+	if (m == NULL) {
+		return NULL;
+	}
+#else
 	m = Py_InitModule3("Redcode", module_methods, module__doc__);
 	if (m == NULL) {
 		return;
 	}
+#endif
 
 	/* Add classes Instruction88, Instruction */
 	Py_INCREF(&Instruction88Type);
@@ -982,7 +1102,11 @@ initRedcode(void)
 	/* Get dict of module. */
 	d = PyModule_GetDict(m);
 	if (d == NULL) {
+#if PY_MAJOR_VERSION >= 3
+		return NULL;
+#else
 		return;
+#endif
 	}
 
 	/* Add instruction set of ICWS '88. */
@@ -1032,4 +1156,8 @@ initRedcode(void)
 	PyModule_AddIntConstant(m, "MODIFIER_X", MODIFIER_X);
 	PyModule_AddIntConstant(m, "MODIFIER_AB", MODIFIER_AB);
 	PyModule_AddIntConstant(m, "MODIFIER_BA", MODIFIER_BA);
+
+#if PY_MAJOR_VERSION >= 3
+		return m;
+#endif
 }

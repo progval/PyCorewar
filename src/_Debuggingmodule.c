@@ -27,12 +27,52 @@ static PyMethodDef module_methods[] = {
 	{NULL} /* sentinel */
 };
 
-#ifndef PyMODINIT_FUNC
-#define PyMODINIT_FUNC void
-#endif
 
 PyDoc_STRVAR(module__doc__,
 "FIXME");
+
+#if PY_MAJOR_VERSION >= 3
+static struct PyModuleDef module_def = {
+    PyModuleDef_HEAD_INIT,
+    "Corewar._Debugging",     /* m_name */
+    module__doc__,  /* m_doc */
+    -1,                  /* m_size */
+    module_methods,    /* m_methods */
+    NULL,                /* m_reload */
+    NULL,                /* m_traverse */
+    NULL,                /* m_clear */
+    NULL,                /* m_free */
+};
+PyMODINIT_FUNC
+PyInit__Debugging(void)
+{
+	PyObject *m;
+
+	if (PyType_Ready(&ProcessQueueType) < 0) {
+        return NULL;
+	}
+	if (PyType_Ready(&CoreType) < 0) {
+        return NULL;
+	}
+	
+    m = PyModule_Create(&module_def);
+	if (m == NULL) {
+        return NULL;
+	}
+	
+	Py_INCREF(&ProcessQueueType);
+	PyModule_AddObject(m, "ProcessQueue", (PyObject *) &ProcessQueueType);
+
+	Py_INCREF(&CoreType);
+	PyModule_AddObject(m, "Core", (PyObject *) &CoreType);
+
+    return m;
+}
+#else
+
+#ifndef PyMODINIT_FUNC
+#define PyMODINIT_FUNC void
+#endif
 
 PyMODINIT_FUNC
 init_Debugging(void)
@@ -40,15 +80,15 @@ init_Debugging(void)
 	PyObject *m;
 
 	if (PyType_Ready(&ProcessQueueType) < 0) {
-		return;
+        return;
 	}
 	if (PyType_Ready(&CoreType) < 0) {
-		return;
+        return;
 	}
 	
 	m = Py_InitModule3("Corewar._Debugging", module_methods, module__doc__);
 	if (m == NULL) {
-		return;
+        return;
 	}
 	
 	Py_INCREF(&ProcessQueueType);
@@ -57,3 +97,4 @@ init_Debugging(void)
 	Py_INCREF(&CoreType);
 	PyModule_AddObject(m, "Core", (PyObject *) &CoreType);
 }
+#endif

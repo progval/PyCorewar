@@ -26,6 +26,16 @@
 #include <BenchMARS88.h>
 #include <BenchMARS94nop.h>
 
+#if PY_MAJOR_VERSION >= 3
+    #define check_py3long_or_py2int PyLong_Check
+    #define py3long_or_py2int_as_long  PyLong_AsLong
+    #define py3long_or_py2int_from_long PyLong_FromLong
+#else
+    #define check_py3long_or_py2int PyInt_Check
+    #define py3long_or_py2int_as_long  PyInt_AsLong
+    #define py3long_or_py2int_from_long PyInt_FromLong
+#endif
+
 /* FIXME: Use faster methods for converting warrior into internal format */
 
 /*
@@ -47,33 +57,33 @@ get_instruction88(PyObject *src, insn_t *insn)
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	opcode = PyInt_AsLong(tmp);
+	opcode = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 
 	tmp = PyObject_GetAttrString(src, "amode");
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	amode = PyInt_AsLong(tmp);
+	amode = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 
 	tmp = PyObject_GetAttrString(src, "bmode");
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	bmode = PyInt_AsLong(tmp);
+	bmode = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 
 	insn->insn = INSN88(opcode, amode, bmode);
@@ -82,22 +92,22 @@ get_instruction88(PyObject *src, insn_t *insn)
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	insn->a = PyInt_AsLong(tmp);
+	insn->a = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 
 	tmp = PyObject_GetAttrString(src, "bfield");
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	insn->b = PyInt_AsLong(tmp);
+	insn->b = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 	
 	return 0;
@@ -149,11 +159,11 @@ get_warrior88(PyObject *w, warrior_t *warrior, u32_t maxlength)
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	length = PyInt_AsLong(tmp);
+	length = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 	if ((length < 1) | (length > maxlength)) {
 		return 1;
@@ -164,11 +174,11 @@ get_warrior88(PyObject *w, warrior_t *warrior, u32_t maxlength)
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	start = PyInt_AsLong(tmp);
+	start = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 	if ((start < 0) | (start >= length)) {
 		return 1;
@@ -329,7 +339,7 @@ static void
 MARS_88_dealloc(MARS_88 *self)
 {
 	free(self->core);
-	self->ob_type->tp_free((PyObject *) self);
+	Py_TYPE(self)->tp_free((PyObject *) self);
 }
 
 PyDoc_STRVAR(MARS_88_coresize__doc__,
@@ -338,7 +348,7 @@ PyDoc_STRVAR(MARS_88_coresize__doc__,
 static PyObject *
 MARS_88_GetCoresize(MARS_88 *self, void *closure)
 {
-	PyObject *coresize = PyInt_FromLong(self->coresize);
+	PyObject *coresize = py3long_or_py2int_from_long(self->coresize);
 	if (coresize == NULL) {
 		return NULL;
 	}
@@ -353,7 +363,7 @@ PyDoc_STRVAR(MARS_88_maxprocesses__doc__,
 static PyObject *
 MARS_88_GetMaxprocesses(MARS_88 *self, void *closure)
 {
-	PyObject *maxprocesses = PyInt_FromLong(self->maxprocesses);
+	PyObject *maxprocesses = py3long_or_py2int_from_long(self->maxprocesses);
 	if (maxprocesses == NULL) {
 		return NULL;
 	}
@@ -368,7 +378,7 @@ PyDoc_STRVAR(MARS_88_maxcycles__doc__,
 static PyObject *
 MARS_88_GetMaxcycles(MARS_88 *self, void *closure)
 {
-	PyObject *maxcycles = PyInt_FromLong(self->maxcycles);
+	PyObject *maxcycles = py3long_or_py2int_from_long(self->maxcycles);
 	if (maxcycles == NULL) {
 		return NULL;
 	}
@@ -383,7 +393,7 @@ PyDoc_STRVAR(MARS_88_mindistance__doc__,
 static PyObject *
 MARS_88_GetMindistance(MARS_88 *self, void *closure)
 {
-	PyObject *mindistance = PyInt_FromLong(self->mindistance);
+	PyObject *mindistance = py3long_or_py2int_from_long(self->mindistance);
 	if (mindistance == NULL) {
 		return NULL;
 	}
@@ -398,7 +408,7 @@ PyDoc_STRVAR(MARS_88_maxlength__doc__,
 static PyObject *
 MARS_88_GetMaxlength(MARS_88 *self, void *closure)
 {
-	PyObject *maxlength = PyInt_FromLong(self->maxlength);
+	PyObject *maxlength = py3long_or_py2int_from_long(self->maxlength);
 	if (maxlength == NULL) {
 		return NULL;
 	}
@@ -646,7 +656,7 @@ MARS_88_mw_run(MARS_88 *self, PyObject *args, PyObject *kwds)
 		}
 		PyList_SetItem(res, i, tmp);
 		for (j = 0; j < numwarriors + 1; j++) {
-			value = PyInt_FromLong(result[i*(numwarriors+1)+j]);
+			value = py3long_or_py2int_from_long(result[i*(numwarriors+1)+j]);
 			PyList_SetItem(tmp, j, value);
 		}
 	}
@@ -686,7 +696,7 @@ static PyGetSetDef MARS_88_getseters[] = {
 };
 
 static PyTypeObject MARS_88Type = {
-	PyObject_HEAD_INIT(NULL) 0, 			/*ob_size*/
+	PyVarObject_HEAD_INIT(NULL, 0) 			/*ob_size*/
 	"Corewar.Benchmarking.MARS_88",			/*tp_name*/
 	sizeof(MARS_88),			 	/*tp_basicsize*/
 	0,                         			/*tp_itemsize*/
@@ -746,44 +756,44 @@ get_instruction94(PyObject *src, insn_t *insn)
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	opcode = PyInt_AsLong(tmp);
+	opcode = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 
 	tmp = PyObject_GetAttrString(src, "modifier");
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	modifier = PyInt_AsLong(tmp);
+	modifier = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 	
 	tmp = PyObject_GetAttrString(src, "amode");
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	amode = PyInt_AsLong(tmp);
+	amode = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 
 	tmp = PyObject_GetAttrString(src, "bmode");
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	bmode = PyInt_AsLong(tmp);
+	bmode = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 
 	insn->insn = INSN(opcode, modifier, amode, bmode);
@@ -792,22 +802,22 @@ get_instruction94(PyObject *src, insn_t *insn)
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	insn->a = PyInt_AsLong(tmp);
+	insn->a = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 
 	tmp = PyObject_GetAttrString(src, "bfield");
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	insn->b = PyInt_AsLong(tmp);
+	insn->b = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 	
 	return 0;
@@ -859,11 +869,11 @@ get_warrior94(PyObject *w, warrior_t *warrior, u32_t maxlength)
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	length = PyInt_AsLong(tmp);
+	length = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 	if ((length < 1) | (length > maxlength)) {
 		return 1;
@@ -874,11 +884,11 @@ get_warrior94(PyObject *w, warrior_t *warrior, u32_t maxlength)
 	if (tmp == NULL) {
 		return 1;
 	}
-	if (!PyInt_Check(tmp)) {
+	if (!check_py3long_or_py2int(tmp)) {
 		Py_DECREF(tmp);
 		return 1;
 	}
-	start = PyInt_AsLong(tmp);
+	start = py3long_or_py2int_as_long(tmp);
 	Py_DECREF(tmp);
 	if ((start < 0) | (start >= length)) {
 		return 1;
@@ -1039,7 +1049,7 @@ static void
 MARS_94nop_dealloc(MARS_94nop *self)
 {
 	free(self->core);
-	self->ob_type->tp_free((PyObject *) self);
+	Py_TYPE(self)->tp_free((PyObject *) self);
 }
 
 PyDoc_STRVAR(MARS_94nop_coresize__doc__,
@@ -1048,7 +1058,7 @@ PyDoc_STRVAR(MARS_94nop_coresize__doc__,
 static PyObject *
 MARS_94nop_GetCoresize(MARS_94nop *self, void *closure)
 {
-	PyObject *coresize = PyInt_FromLong(self->coresize);
+	PyObject *coresize = py3long_or_py2int_from_long(self->coresize);
 	if (coresize == NULL) {
 		return NULL;
 	}
@@ -1063,7 +1073,7 @@ PyDoc_STRVAR(MARS_94nop_maxprocesses__doc__,
 static PyObject *
 MARS_94nop_GetMaxprocesses(MARS_94nop *self, void *closure)
 {
-	PyObject *maxprocesses = PyInt_FromLong(self->maxprocesses);
+	PyObject *maxprocesses = py3long_or_py2int_from_long(self->maxprocesses);
 	if (maxprocesses == NULL) {
 		return NULL;
 	}
@@ -1078,7 +1088,7 @@ PyDoc_STRVAR(MARS_94nop_maxcycles__doc__,
 static PyObject *
 MARS_94nop_GetMaxcycles(MARS_94nop *self, void *closure)
 {
-	PyObject *maxcycles = PyInt_FromLong(self->maxcycles);
+	PyObject *maxcycles = py3long_or_py2int_from_long(self->maxcycles);
 	if (maxcycles == NULL) {
 		return NULL;
 	}
@@ -1093,7 +1103,7 @@ PyDoc_STRVAR(MARS_94nop_mindistance__doc__,
 static PyObject *
 MARS_94nop_GetMindistance(MARS_94nop *self, void *closure)
 {
-	PyObject *mindistance = PyInt_FromLong(self->mindistance);
+	PyObject *mindistance = py3long_or_py2int_from_long(self->mindistance);
 	if (mindistance == NULL) {
 		return NULL;
 	}
@@ -1108,7 +1118,7 @@ PyDoc_STRVAR(MARS_94nop_maxlength__doc__,
 static PyObject *
 MARS_94nop_GetMaxlength(MARS_94nop *self, void *closure)
 {
-	PyObject *maxlength = PyInt_FromLong(self->maxlength);
+	PyObject *maxlength = py3long_or_py2int_from_long(self->maxlength);
 	if (maxlength == NULL) {
 		return NULL;
 	}
@@ -1357,7 +1367,7 @@ MARS_94nop_mw_run(MARS_94nop *self, PyObject *args, PyObject *kwds)
 		}
 		PyList_SetItem(res, i, tmp);
 		for (j = 0; j < numwarriors + 1; j++) {
-			value = PyInt_FromLong(result[i*(numwarriors+1)+j]);
+			value = py3long_or_py2int_from_long(result[i*(numwarriors+1)+j]);
 			PyList_SetItem(tmp, j, value);
 		}
 	}
@@ -1397,7 +1407,7 @@ static PyGetSetDef MARS_94nop_getseters[] = {
 };
 
 static PyTypeObject MARS_94nopType = {
-	PyObject_HEAD_INIT(NULL) 0, 			/*ob_size*/
+	PyVarObject_HEAD_INIT(NULL, 0) 			/*ob_size*/
 	"Corewar.Benchmarking.MARS_94nop",		/*tp_name*/
 	sizeof(MARS_94nop),			 	/*tp_basicsize*/
 	0,                         			/*tp_itemsize*/
@@ -1451,6 +1461,46 @@ PyDoc_STRVAR(module__doc__,
 "  MARS_88    -- MARS with ICWS '88 rules\n"\
 "  MARS_94nop -- MARS with ICWS '94 draft rules (no P-Space)");
 
+#if PY_MAJOR_VERSION >= 3
+static struct PyModuleDef module_def = {
+    PyModuleDef_HEAD_INIT,
+    "Corewar.Benchmarking",     /* m_name */
+    module__doc__,  /* m_doc */
+    -1,                  /* m_size */
+    module_methods,    /* m_methods */
+    NULL,                /* m_reload */
+    NULL,                /* m_traverse */
+    NULL,                /* m_clear */
+    NULL,                /* m_free */
+};
+PyMODINIT_FUNC
+PyInit_Benchmarking(void)
+{
+	PyObject *m;
+
+	if (PyType_Ready(&MARS_88Type) < 0) {
+		return NULL;
+	}
+
+	if (PyType_Ready(&MARS_94nopType) < 0) {
+		return NULL;
+	}
+	
+    m = PyModule_Create(&module_def);
+	if (m == NULL) {
+		return NULL;
+	}
+	
+	Py_INCREF(&MARS_88Type);
+	PyModule_AddObject(m, "MARS_88", (PyObject *) &MARS_88Type);
+
+	Py_INCREF(&MARS_94nopType);
+	PyModule_AddObject(m, "MARS_94nop", (PyObject *) &MARS_94nopType);
+
+    return m;
+}
+#else
+
 PyMODINIT_FUNC
 initBenchmarking(void)
 {
@@ -1476,3 +1526,4 @@ initBenchmarking(void)
 	Py_INCREF(&MARS_94nopType);
 	PyModule_AddObject(m, "MARS_94nop", (PyObject *) &MARS_94nopType);
 }
+#endif

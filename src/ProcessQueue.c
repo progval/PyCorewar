@@ -74,7 +74,7 @@ static void
 ProcessQueue_dealloc(ProcessQueue *self)
 {
 	free(self->queue);
-	self->ob_type->tp_free((PyObject*) self);
+	Py_TYPE(self)->tp_free((PyObject*) self);
 }
 
 static int
@@ -96,7 +96,11 @@ ProcessQueue_GetItem(ProcessQueue *self, int i)
 	}
 
 	pos = (self->head + i) % self->maxprocess;
+#if PY_MAJOR_VERSION >= 3
+	proc = PyLong_FromLong(self->queue[pos]);
+#else
 	proc = PyInt_FromLong(self->queue[pos]);
+#endif
 	if (proc == NULL) {
 		return NULL;
 	}
@@ -116,12 +120,20 @@ ProcessQueue_SetItem(ProcessQueue *self, int i, PyObject *proc)
 		PyErr_SetString(PyExc_IndexError, "Invalid index.");
 		return -1;
 	}
+#if PY_MAJOR_VERSION >= 3
+	if (!PyLong_Check(proc)) {
+#else
 	if (!PyInt_Check(proc)) {
+#endif
 		PyErr_SetString(PyExc_TypeError,
 				"Process must be an unsigned integer.");
 		return -1;
 	}
+#if PY_MAJOR_VERSION >= 3
+	new_proc = PyLong_AsLong(proc);
+#else
 	new_proc = PyInt_AsLong(proc);
+#endif
 	if (new_proc < 1) {
 		PyErr_SetString(PyExc_TypeError, 
 				"Process must be an unsigned integer.");
@@ -150,7 +162,11 @@ ProcessQueue_get(ProcessQueue *self)
 		return NULL;
 	}
 
+#if PY_MAJOR_VERSION >= 3
+	proc = PyLong_FromLong(self->queue[self->head]);
+#else
 	proc = PyInt_FromLong(self->queue[self->head]);
+#endif
 	if (proc == NULL) {
 		return NULL;
 	}
@@ -228,7 +244,7 @@ static PySequenceMethods ProcessQueue_as_sequence = {
 };
 
 PyTypeObject ProcessQueueType = {
-	PyObject_HEAD_INIT(NULL) 0, 			/*ob_size*/
+	PyVarObject_HEAD_INIT(NULL, 0) 			/*ob_size*/
 	"Corewar.Debugging.ProcessQueue",		/*tp_name*/
 	sizeof(ProcessQueue),		 	  	/*tp_basicsize*/
 	0,                         			/*tp_itemsize*/

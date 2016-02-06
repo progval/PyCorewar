@@ -16,8 +16,9 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 
+import sys
 import os.path
-import sha
+import hashlib
 import unittest
 import Corewar
 
@@ -96,11 +97,14 @@ class TestCase(unittest.TestCase):
             fname = 'warriors/Koenigstuhl/88/' + fname
             try:
                 warrior = self.parser_88.parse_file(fname)
-            except Exception, e:
-                print e
+            except Exception as e:
+                print(e)
                 self.fail('Could not parse file %s' % fname)
 
-            md = sha.new(str(warrior))
+            warrior_str = str(warrior)
+            if sys.version_info[0] >= 3:
+                warrior_str = warrior_str.encode('ISO-8859-1')
+            md = hashlib.sha1(warrior_str)
             self.assertEqual(md.hexdigest(), expectedMD)
 
         resFile.close()
@@ -117,11 +121,14 @@ class TestCase(unittest.TestCase):
             fname = 'warriors/Koenigstuhl/tiny/' + fname
             try:
                 warrior = self.parser_tiny.parse_file(fname)
-            except Exception, e:
-                print e
+            except Exception as e:
+                print(e)
                 self.fail('Could not parse file %s' % fname)
 
-            md = sha.new(str(warrior))
+            warrior_str = str(warrior)
+            if sys.version_info[0] >= 3:
+                warrior_str = warrior_str.encode('ISO-8859-1')
+            md = hashlib.sha1(warrior_str)
             self.assertEqual(md.hexdigest(), expectedMD)
 
         resFile.close()
@@ -138,11 +145,14 @@ class TestCase(unittest.TestCase):
             fname = 'warriors/Koenigstuhl/nano/' + fname
             try:
                 warrior = self.parser_nano.parse_file(fname)
-            except Exception, e:
-                print e
+            except Exception as e:
+                print(e)
                 self.fail('Could not parse file %s' % fname)
 
-            md = sha.new(str(warrior))
+            warrior_str = str(warrior)
+            if sys.version_info[0] >= 3:
+                warrior_str = warrior_str.encode('ISO-8859-1')
+            md = hashlib.sha1(warrior_str)
             self.assertEqual(md.hexdigest(), expectedMD)
 
         resFile.close()
@@ -159,11 +169,14 @@ class TestCase(unittest.TestCase):
             fname = 'warriors/Koenigstuhl/94nop/' + fname
             try:
                 warrior = self.parser_94nop.parse_file(fname)
-            except Exception, e:
-                print e
+            except Exception as e:
+                print(e)
                 self.fail('Could not parse file %s' % fname)
 
-            md = sha.new(str(warrior))
+            warrior_str = str(warrior)
+            if sys.version_info[0] >= 3:
+                warrior_str = warrior_str.encode('ISO-8859-1')
+            md = hashlib.sha1(warrior_str)
             self.assertEqual(md.hexdigest(), expectedMD)
 
         resFile.close()
@@ -180,11 +193,14 @@ class TestCase(unittest.TestCase):
             fname = 'warriors/Koenigstuhl/lp/' + fname
             try:
                 warrior = self.parser_lp.parse_file(fname)
-            except Exception, e:
-                print e
+            except Exception as e:
+                print(e)
                 self.fail('Could not parse file %s' % fname)
 
-            md = sha.new(str(warrior))
+            warrior_str = str(warrior)
+            if sys.version_info[0] >= 3:
+                warrior_str = warrior_str.encode('ISO-8859-1')
+            md = hashlib.sha1(warrior_str)
             self.assertEqual(md.hexdigest(), expectedMD)
 
         resFile.close()
