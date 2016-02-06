@@ -991,7 +991,10 @@ class Parser(object):
                 raise WarriorParseError, ('Label \'%s\' is unknown' % var,
                                           lineNum)
 
-        return self.calc.eval(expr)
+        val = self.calc.eval(expr) % self.coresize
+        if val > (self.coresize // 2):
+            val = - (self.coresize - val)
+        return val
 
 class EvalError(Exception):
     pass
