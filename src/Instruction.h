@@ -23,6 +23,9 @@
 #include <string.h>
 #include <MyTypes.h>
 
+/* Max. supported coresize. */
+#define MAX_CORESIZE    1000000000
+
 /*
  * opcodes
  */

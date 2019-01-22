@@ -77,7 +77,91 @@ Instruction88_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
 	Instruction88 *self;
 	s32_t coresize = 8000;
+  PyObject *state;
 
+  /* Check for invocation from pickle with __getstate__ state. */
+  if (PyTuple_GET_SIZE(args) == 4) {
+    s32_t coresize;
+    s32_t insn;
+    s32_t a;
+    s32_t b;
+
+    /* Get and check coresize. */
+#if PY_MAJOR_VERSION >= 3
+    if (PyLong_Check(state = PyTuple_GET_ITEM(args, 0))) {
+      coresize = PyLong_AsLong(state);
+#else
+    if (PyInt_Check(state = PyTuple_GET_ITEM(args, 0))) {
+      coresize = PyInt_AsLong(state);
+#endif
+      if ((coresize < 1) || (coresize > MAX_CORESIZE)) {
+        PyErr_SetString(PyExc_ValueError, "Bad "\
+                        "coresize state");
+        return NULL;
+      }
+    } else {
+      PyErr_SetString(PyExc_TypeError, "Bad coresize state");
+      return NULL;
+    }
+
+    /* Get and check opcode/modifier/A-mode/B-mode. */
+#if PY_MAJOR_VERSION >= 3
+    if (PyLong_Check(state = PyTuple_GET_ITEM(args, 1))) {
+      insn = PyLong_AsLong(state);
+#else
+    if (PyInt_Check(state = PyTuple_GET_ITEM(args, 1))) {
+      insn = PyInt_AsLong(state);
+#endif
+      if ((insn < 0) ||
+          (insn > INSN(0x11, 0x06, 0x07, 0x07))) {
+        PyErr_SetString(PyExc_ValueError, "Bad "\
+                        "instruction state");
+        return NULL;
+      }
+    } else {
+      PyErr_SetString(PyExc_TypeError,
+                      "Bad instruction state");
+      return NULL;
+    }
+
+    /* Get and check A-field. */
+
+#if PY_MAJOR_VERSION >= 3
+    if (PyLong_Check(state = PyTuple_GET_ITEM(args, 2))) {
+      a = PyLong_AsLong(state);
+#else
+    if (PyInt_Check(state = PyTuple_GET_ITEM(args, 2))) {
+      a = PyInt_AsLong(state);
+#endif
+      if ((a < 0) || (a >= coresize)) {
+        PyErr_SetString(PyExc_ValueError, "Bad "\
+                        "A-field state");
+        return NULL;
+      }
+    } else {
+      PyErr_SetString(PyExc_TypeError, "Bad A-field state");
+      return NULL;
+    }
+
+    /* Get and check B-field. */
+#if PY_MAJOR_VERSION >= 3
+    if (PyLong_Check(state = PyTuple_GET_ITEM(args, 3))) {
+      b = PyLong_AsLong(state);
+#else
+    if (PyInt_Check(state = PyTuple_GET_ITEM(args, 3))) {
+      b = PyInt_AsLong(state);
+#endif
+      if ((b < 0) || (b >= coresize)) {
+        PyErr_SetString(PyExc_ValueError, "Bad "\
+                        "B-field state");
+        return NULL;
+      }
+    } else {
+      PyErr_SetString(PyExc_TypeError, "Bad B-field state");
+      return NULL;
+    }
+
+  }
 	/* get coresize */
 	static char *kwlist[] = {"coresize", NULL};
 	PyArg_ParseTupleAndKeywords(args, kwds, "|i", kwlist, &coresize);
@@ -458,6 +542,22 @@ Instruction88_reinit(Instruction88 *self)
 	return Py_None;
 }
 
+/* Pickle support. */
+
+static PyObject *
+  Instruction88_getstate(Instruction88 *self)
+{
+  return Py_BuildValue("kkkk", self->coresize, self->insn.insn,
+                       self->insn.a, self->insn.b);
+}
+
+static PyObject *
+  Instruction88_reduce(Instruction88 *self)
+{
+  return Py_BuildValue("(ON)", Py_TYPE(self),
+                       Instruction88_getstate(self));
+}
+
 static PyMemberDef Instruction88_members[] = {
 	{NULL} /* sentinel */
 };
@@ -466,6 +566,8 @@ static PyMethodDef Instruction88_methods[] = {
 	{"copy", (PyCFunction)Instruction88_copy, METH_NOARGS, copy88__doc__},
 	{"reinit", (PyCFunction)Instruction88_reinit, METH_NOARGS,
 	 reinit88__doc__},
+  {"__reduce__", (PyCFunction)Instruction88_reduce, METH_NOARGS,
+   PyDoc_STR("__reduce__() -> (cls, state)")},
 	{NULL, NULL, 0, NULL} /* sentinel */
 };
 
@@ -485,7 +587,7 @@ static PyGetSetDef Instruction88_getseters[] = {
 
 static PyTypeObject Instruction88Type = {
 	PyVarObject_HEAD_INIT(NULL, 0) 			/*ob_size*/
-	"Redcode.Instruction88",			/*tp_name*/
+	"Corewar.Redcode.Instruction88",			/*tp_name*/
 	sizeof(Instruction88),		 	  	/*tp_basicsize*/
 	0,                         			/*tp_itemsize*/
 	(destructor)Instruction88_dealloc,	  	/*tp_dealloc*/
@@ -545,7 +647,102 @@ static PyObject *
 Instruction_new(PyTypeObject *type, PyObject *args, PyObject *kwds)
 {
 	Instruction *self;
-	s32_t coresize = 8000;
+  PyObject *state;
+  s32_t coresize = 8000;
+
+  /* Check for invocation from pickle with __getstate__ state. */
+  if (PyTuple_GET_SIZE(args) == 4) {
+    s32_t coresize;
+    s32_t insn;
+    s32_t a;
+    s32_t b;
+
+    /* Get and check coresize. */
+#if PY_MAJOR_VERSION >= 3
+    if (PyLong_Check(state = PyTuple_GET_ITEM(args, 0))) {
+      coresize = PyLong_AsLong(state);
+#else
+    if (PyInt_Check(state = PyTuple_GET_ITEM(args, 0))) {
+      coresize = PyInt_AsLong(state);
+#endif
+      if ((coresize < 1) || (coresize > MAX_CORESIZE)) {
+        PyErr_SetString(PyExc_ValueError, "Bad "\
+                        "coresize state");
+        return NULL;
+      }
+    } else {
+      PyErr_SetString(PyExc_TypeError, "Bad coresize state");
+      return NULL;
+    }
+
+    /* Get and check opcode/modifier/A-mode/B-mode. */
+#if PY_MAJOR_VERSION >= 3
+    if (PyLong_Check(state = PyTuple_GET_ITEM(args, 1))) {
+      insn = PyLong_AsLong(state);
+#else
+    if (PyInt_Check(state = PyTuple_GET_ITEM(args, 1))) {
+      insn = PyInt_AsLong(state);
+#endif
+      if ((insn < 0) ||
+          (insn > INSN(0x11, 0x06, 0x07, 0x07))) {
+        PyErr_SetString(PyExc_ValueError, "Bad "\
+                        "instruction state");
+        return NULL;
+      }
+    } else {
+      PyErr_SetString(PyExc_TypeError,
+                      "Bad instruction state");
+      return NULL;
+    }
+
+    /* Get and check A-field. */
+
+#if PY_MAJOR_VERSION >= 3
+    if (PyLong_Check(state = PyTuple_GET_ITEM(args, 2))) {
+      a = PyLong_AsLong(state);
+#else
+    if (PyInt_Check(state = PyTuple_GET_ITEM(args, 2))) {
+      a = PyInt_AsLong(state);
+#endif
+      if ((a < 0) || (a >= coresize)) {
+        PyErr_SetString(PyExc_ValueError, "Bad "\
+                        "A-field state");
+        return NULL;
+      }
+    } else {
+      PyErr_SetString(PyExc_TypeError, "Bad A-field state");
+      return NULL;
+    }
+
+    /* Get and check B-field. */
+#if PY_MAJOR_VERSION >= 3
+    if (PyLong_Check(state = PyTuple_GET_ITEM(args, 3))) {
+      b = PyLong_AsLong(state);
+#else
+    if (PyInt_Check(state = PyTuple_GET_ITEM(args, 3))) {
+      b = PyInt_AsLong(state);
+#endif
+      if ((b < 0) || (b >= coresize)) {
+        PyErr_SetString(PyExc_ValueError, "Bad "\
+                        "B-field state");
+        return NULL;
+      }
+    } else {
+      PyErr_SetString(PyExc_TypeError, "Bad B-field state");
+      return NULL;
+    }
+
+    /* Build instruction. */
+    self = (Instruction *) type->tp_alloc(type, 0);
+    if (self != NULL) {
+      self->coresize = coresize;
+      self->insn.insn = insn;
+      self->insn.a = a;
+      self->insn.b = b;
+    }
+
+    return (PyObject *) self;
+  }
 
 	/* get coresize */
 	static char *kwlist[] = {"coresize", NULL};
@@ -940,6 +1137,22 @@ Instruction_copy(Instruction *self)
 	return (PyObject*) insn_copy;
 }
 
+/* Pickle support. */
+
+static PyObject *
+  Instruction_getstate(Instruction *self)
+{
+  return Py_BuildValue("kkkk", self->coresize, self->insn.insn,
+                       self->insn.a, self->insn.b);
+}
+
+static PyObject *
+  Instruction_reduce(Instruction *self)
+{
+  return Py_BuildValue("(ON)", Py_TYPE(self),
+                       Instruction_getstate(self));
+}
+
 PyDoc_STRVAR(reinit__doc__,
 "reinit() -> None\n\n"\
 "Reset instruction to default values (DAT.F $ 0, $ 0).");
@@ -963,6 +1176,8 @@ static PyMethodDef Instruction_methods[] = {
 	{"copy", (PyCFunction)Instruction_copy, METH_NOARGS, copy__doc__},
 	{"reinit", (PyCFunction)Instruction_reinit, METH_NOARGS,
 	 reinit__doc__},
+  {"__reduce__", (PyCFunction)Instruction_reduce, METH_NOARGS,
+   PyDoc_STR("__reduce__() -> (cls, state)")},
 	{NULL, NULL, 0, NULL} /* sentinel */
 };
 
@@ -984,7 +1199,7 @@ static PyGetSetDef Instruction_getseters[] = {
 
 static PyTypeObject InstructionType = {
 	PyVarObject_HEAD_INIT(NULL, 0) 			/*ob_size*/
-	"Redcode.Instruction",	 			/*tp_name*/
+	"Corewar.Redcode.Instruction",	 			/*tp_name*/
 	sizeof(Instruction),		 	  	/*tp_basicsize*/
 	0,                         			/*tp_itemsize*/
 	(destructor)Instruction_dealloc,	  	/*tp_dealloc*/
