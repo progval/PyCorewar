@@ -85,10 +85,12 @@ class Warrior(object):
 
     def __repr__(self):
         """Return string representation of warrior"""
+        s = ''
 
-        s  = 'Program "%s" ' % self.name
-        s += '(length %d) ' % len(self.instructions)
-        s += 'by "%s"\n\n' % self.author
+        s += ';redcode-%s\n'
+        s += ';name %s\n'
+        s += ';author %s\n'
+        s += ';assert 1\n'
 
         if not self.standard == STANDARD_88:
             s += '       ORG      START\n'
